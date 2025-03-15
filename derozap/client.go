@@ -59,6 +59,8 @@ func NewClient(username, password string) (*Client, error) {
 		password: password,
 	}
 
+	slog.Debug("initialised dero zap client")
+
 	return client, nil
 }
 

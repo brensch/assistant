@@ -28,13 +28,7 @@ func convertDateFormat(dateStr string) (string, error) {
 }
 
 // handleDerozapCommand processes the Discord command to fetch tag reads from Dero ZAP.
-func handleDerozapCommand(req DerozapRequest) (*discordgo.InteractionResponseData, error) {
-	// Initialize the Dero ZAP client.
-	// Replace "your_username" and "your_password" with actual credentials.
-	client, err := NewClient("your_username", "your_password")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Dero ZAP client: %w", err)
-	}
+func (c *Client) handleDerozapCommand(req DerozapRequest) (*discordgo.InteractionResponseData, error) {
 
 	// Prepare optional date range parameters.
 	var options []ReportOption
@@ -57,7 +51,7 @@ func handleDerozapCommand(req DerozapRequest) (*discordgo.InteractionResponseDat
 	}
 
 	// Fetch tag reads from Dero ZAP.
-	tagReads, err := client.FetchTagReads(options...)
+	tagReads, err := c.FetchTagReads(options...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch tag reads: %w", err)
 	}
@@ -69,7 +63,6 @@ func handleDerozapCommand(req DerozapRequest) (*discordgo.InteractionResponseDat
 	}, nil
 }
 
-// DerozapCommand registers the derozap command with the Discord bot interface.
-// When the "derozap" command is invoked, it will decode any provided start and end date options,
-// convert them to the expected format, and then fetch the report.
-var DerozapCommand = discord.NewBotFunction("derozap", handleDerozapCommand, nil)
+func (c *Client) DiscordCommandRetrieveZaps() discord.BotFunctionI {
+	return discord.NewBotFunction("retreive_zaps", c.handleDerozapCommand, nil)
+}

@@ -154,13 +154,37 @@ func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.Interaction
 	}
 	if fn == nil {
 		slog.Warn("received unknown command", "command", cmdData.Name)
+		// Optionally send an error embed for an unknown command.
+		errorEmbed := &discordgo.MessageEmbed{
+			Title:       "Error",
+			Description: "Unknown command: " + cmdData.Name,
+			Color:       0xFF0000,
+		}
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{errorEmbed},
+			},
+		})
 		return
 	}
 
 	// Execute the function's handler using the interaction data.
 	respData, err := fn.HandleInteraction(&cmdData)
 	if err != nil {
-		slog.Error("failed to execute command", "command", fn.GetName(), "error", err)
+		slog.Error("failed to execute command", "command", fn.GetName(), "error", err.Error())
+		errorEmbed := &discordgo.MessageEmbed{
+			Title:       "Error",
+			Description: fmt.Sprintf("```%v```", err),
+			Color:       0xFF0000,
+		}
+		// Respond with the error embed.
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{errorEmbed},
+			},
+		})
 		return
 	}
 
@@ -171,6 +195,15 @@ func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.Interaction
 	})
 	if err != nil {
 		slog.Error("failed to respond to command", "command", fn.GetName(), "error", err)
+		errorEmbed := &discordgo.MessageEmbed{
+			Title:       "Error",
+			Description: fmt.Sprintf("```%v```", err),
+			Color:       0xFF0000,
+		}
+		// Attempt to send a follow-up error message if the initial response fails.
+		s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Embeds: []*discordgo.MessageEmbed{errorEmbed},
+		})
 	}
 }
 

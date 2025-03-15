@@ -67,12 +67,14 @@ func (bf *GenericBotFunction[T]) HandleInteraction(data *discordgo.ApplicationCo
 	if err != nil {
 		return nil, err
 	}
-	if err := decoder.Decode(optsMap); err != nil {
+	err = decoder.Decode(optsMap)
+	if err != nil {
 		return nil, err
 	}
 
 	// Set default values on fields that are still zero.
-	if err := setDefaults(&req); err != nil {
+	err = setDefaults(&req)
+	if err != nil {
 		return nil, err
 	}
 

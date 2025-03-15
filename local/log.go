@@ -36,8 +36,11 @@ func (h *PrettyHandler) Handle(ctx context.Context, r slog.Record) error {
 
 	fields := make(map[string]interface{}, r.NumAttrs())
 	r.Attrs(func(a slog.Attr) bool {
-		fields[a.Key] = a.Value.Any()
-
+		if errVal, ok := a.Value.Any().(error); ok {
+			fields[a.Key] = errVal.Error()
+		} else {
+			fields[a.Key] = a.Value.Any()
+		}
 		return true
 	})
 

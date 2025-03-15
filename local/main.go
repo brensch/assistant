@@ -50,6 +50,8 @@ func main() {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
+	slog.Error("yo")
+
 	// Log startup message.
 	slog.Info("Discord Bot Starting")
 
@@ -68,12 +70,21 @@ func main() {
 
 	slog.Info("Initializing bot", "app_id", cfg.AppID, "token_prefix", botToken[:5]+"...")
 
+	deroZapUser := os.Getenv("DEROUSER")
+	deroZapPass := os.Getenv("DEROPASS")
+
+	deroClient, err := derozap.NewClient(deroZapUser, deroZapPass)
+	if err != nil {
+		slog.Error("failed to init dero zap", "err", err)
+		os.Exit(1)
+	}
+
 	// Create a slice of bot functions using generics.
 	functions := []discord.BotFunctionI{
 		// The autocomplete parameter is nil here.
 		discord.NewBotFunction("cool", coolHandler, nil),
 		discord.NewBotFunction("boolism", boolismHandler, nil),
-		derozap.DerozapCommand,
+		deroClient.DiscordCommandRetrieveZaps(),
 	}
 
 	// Create the bot, providing the configuration and list of functions.
@@ -93,7 +104,8 @@ func main() {
 
 	// Shut down the bot.
 	slog.Info("Shutting down bot...")
-	if err := bot.Close(); err != nil {
+	err = bot.Close()
+	if err != nil {
 		slog.Error("Error during shutdown", "error", err)
 	}
 }
