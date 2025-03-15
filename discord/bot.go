@@ -9,11 +9,13 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-// Bot encapsulates the discordgo session, configuration, and registered functions.
+// Bot encapsulates the discordgo session, configuration, registered functions, and schedules.
 type Bot struct {
-	session   *discordgo.Session
-	config    BotConfig
-	functions []BotFunctionI
+	session         *discordgo.Session
+	config          BotConfig
+	functions       []BotFunctionI
+	schedules       []BotScheduleI
+	scheduleManager *scheduleManager
 }
 
 // BotConfig contains configuration for the bot.
@@ -24,7 +26,8 @@ type BotConfig struct {
 
 // NewBot creates a new Bot instance, re-registers each command function on a per-guild basis,
 // and sends an online message listing all available commands to each guild.
-func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
+// It also initializes scheduled tasks based on the provided cron expressions.
+func NewBot(cfg BotConfig, functions []BotFunctionI, schedules []BotScheduleI) (*Bot, error) {
 	// Create a new Discord session using the provided bot token.
 	dg, err := discordgo.New("Bot " + cfg.BotToken)
 	if err != nil {
@@ -38,6 +41,7 @@ func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
 		session:   dg,
 		config:    cfg,
 		functions: functions,
+		schedules: schedules,
 	}
 
 	// Register event handlers.
@@ -54,7 +58,17 @@ func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
 	for _, fn := range functions {
 		availableCommands = append(availableCommands, fn.GetName())
 	}
+
+	// Add schedule names to the message
+	var activeSchedules []string
+	for _, schedule := range schedules {
+		activeSchedules = append(activeSchedules, fmt.Sprintf("%s (%s)", schedule.GetName(), schedule.GetCronExpression()))
+	}
+
 	commandsMessage := fmt.Sprintf("Assistant online. Available commands: %s", strings.Join(availableCommands, ", "))
+	if len(activeSchedules) > 0 {
+		commandsMessage += fmt.Sprintf("\nActive schedules: %s", strings.Join(activeSchedules, ", "))
+	}
 
 	// For each guild, delete all existing bot commands and register new ones.
 	for _, guild := range dg.State.Guilds {
@@ -118,6 +132,16 @@ func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
 			if err != nil {
 				slog.Error("failed to send online message", "guild", guild.ID, "error", err)
 			}
+		}
+	}
+
+	// Initialize and start the schedule manager if there are schedules
+	if len(schedules) > 0 {
+		bot.scheduleManager = newScheduleManager(bot, schedules)
+		err = bot.scheduleManager.start()
+		if err != nil {
+			slog.Error("failed to start schedule manager", "error", err)
+			return nil, err
 		}
 	}
 
@@ -207,8 +231,14 @@ func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.Interaction
 	}
 }
 
-// Close gracefully closes the Discord session.
+// Close gracefully closes the Discord session and stops the schedule manager.
 func (b *Bot) Close() error {
 	slog.Info("shutting down bot")
+
+	// Stop the schedule manager if it was initialized
+	if b.scheduleManager != nil {
+		b.scheduleManager.stop()
+	}
+
 	return b.session.Close()
 }

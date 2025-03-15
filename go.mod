@@ -9,6 +9,7 @@ require (
 	github.com/fatih/color v1.18.0
 	github.com/marcboeker/go-duckdb v1.8.5
 	github.com/mitchellh/mapstructure v1.5.0
+	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/net v0.34.0
 )
 

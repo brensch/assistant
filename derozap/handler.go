@@ -139,7 +139,7 @@ func (c *Client) handleDerozapCommand(req DerozapRequest) (*discordgo.Interactio
 	}, nil
 }
 
-// DiscordCommandRetrieveZaps returns the command handler for retrieving Dero ZAP tag reads.
-func (c *Client) DiscordCommandRetrieveZaps() discord.BotFunctionI {
+// DiscordFunctionRetrieveZaps returns the command handler for retrieving Dero ZAP tag reads.
+func (c *Client) DiscordFunctionRetrieveZaps() discord.BotFunctionI {
 	return discord.NewBotFunction("retreive_zaps", c.handleDerozapCommand, nil)
 }

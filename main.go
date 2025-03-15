@@ -122,11 +122,16 @@ func main() {
 	functions := []discord.BotFunctionI{
 		// The autocomplete parameter is nil here.
 
-		deroClient.DiscordCommandRetrieveZaps(),
+		deroClient.DiscordFunctionRetrieveZaps(),
+	}
+
+	// Define scheduled tasks
+	schedules := []discord.BotScheduleI{
+		deroClient.DiscordScheduleZapCheck("30 * * * * *"),
 	}
 
 	// Create the bot, providing the configuration and list of functions.
-	bot, err := discord.NewBot(cfg, functions)
+	bot, err := discord.NewBot(cfg, functions, schedules)
 	if err != nil {
 		slog.Error("Failed to create bot", "error", err)
 		os.Exit(1)
@@ -134,8 +139,6 @@ func main() {
 
 	// Log successful startup.
 	slog.Info("Bot is now running")
-
-	deroClient.Start(bot)
 
 	// Wait for an interrupt signal to gracefully shut down.
 	stop := make(chan os.Signal, 1)
