@@ -25,8 +25,11 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	cfg := discord.BotConfig{
+	botToken := os.Getenv("BOTTOKEN")
 
+	cfg := discord.BotConfig{
+		AppID:    "1349959098543767602",
+		BotToken: botToken,
 		// ChannelIDs: []string{"channelID1", "channelID2"},
 	}
 	var err error

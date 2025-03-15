@@ -49,7 +49,7 @@ type InteractionCallbackData struct {
 type CommandPayload struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	// You can add options here if needed.
+	Type        int    `json:"type"` // Add this field
 }
 
 // Bot holds configuration for your Discord bot.
@@ -77,8 +77,9 @@ func NewBot(cfg BotConfig) (*Bot, error) {
 
 	// Register the global command "say hi".
 	err := bot.registerGlobalCommand(CommandPayload{
-		Name:        "say hi",
+		Name:        "sayhi", // no spaces, all lowercase
 		Description: "Replies with hi",
+		Type:        1, // CHAT_INPUT command
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to register global command: %w", err)
