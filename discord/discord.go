@@ -21,6 +21,18 @@ const (
 	ChannelMessageWithSource = 4
 )
 
+// CommandType represents the type of a Discord command.
+type CommandType int
+
+const (
+	// ChatInputCommand represents a slash command.
+	ChatInputCommand CommandType = 1
+	// You can add additional command types here if needed.
+	// For example:
+	// UserCommand    CommandType = 2
+	// MessageCommand CommandType = 3
+)
+
 // Interaction represents a minimal Discord interaction payload.
 type Interaction struct {
 	Type  int              `json:"type"`
@@ -47,9 +59,9 @@ type InteractionCallbackData struct {
 
 // CommandPayload defines the JSON structure for a slash command.
 type CommandPayload struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Type        int    `json:"type"` // Add this field
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Type        CommandType `json:"type"`
 }
 
 // Bot holds configuration for your Discord bot.
@@ -77,9 +89,9 @@ func NewBot(cfg BotConfig) (*Bot, error) {
 
 	// Register the global command "say hi".
 	err := bot.registerGlobalCommand(CommandPayload{
-		Name:        "sayhi", // no spaces, all lowercase
+		Name:        "sayhi", // Must be all lowercase with no spaces
 		Description: "Replies with hi",
-		Type:        1, // CHAT_INPUT command
+		Type:        ChatInputCommand,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to register global command: %w", err)
@@ -144,7 +156,8 @@ func (b *Bot) Handler(w http.ResponseWriter, r *http.Request) {
 
 	// Process application commands.
 	if interaction.Type == ApplicationCommand && interaction.Data != nil {
-		if interaction.Data.Name == "say hi" {
+		// Make sure the command name matches what Discord sends (command names are lowercased).
+		if interaction.Data.Name == "sayhi" {
 			resp := InteractionResponse{
 				Type: ChannelMessageWithSource,
 				Data: &InteractionCallbackData{
