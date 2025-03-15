@@ -8,8 +8,6 @@ import (
 
 	"github.com/brensch/assistant/discord"
 	"github.com/bwmarrin/discordgo"
-	"github.com/lmittmann/tint"
-	"github.com/mattn/go-colorable"
 )
 
 // CoolRequest defines the request structure for the "cool" command.
@@ -41,11 +39,12 @@ func boolismHandler(req BoolismRequest) (*discordgo.InteractionResponseData, err
 
 func main() {
 	// Configure pretty colored logging with tint.
-	handler := tint.NewHandler(colorable.NewColorableStdout(), &tint.Options{
-		Level:      slog.LevelDebug,
-		TimeFormat: "15:04:05.000",
-		AddSource:  true,
-	})
+	opts := PrettyHandlerOptions{
+		SlogOpts: slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		},
+	}
+	handler := NewPrettyHandler(os.Stdout, opts)
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 

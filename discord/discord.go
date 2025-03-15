@@ -130,8 +130,8 @@ func structToCommandOptions(req Request) ([]*discordgo.ApplicationCommandOption,
 	return options, nil
 }
 
-// NewBot creates a new Bot instance and registers all provided command functions using reflection
-// to generate their Discord slash command options.
+// NewBot creates a new Bot instance, registers each command function
+// for every guild the bot is in, and sends an online message listing all available commands.
 func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
 	// Create a new Discord session using the provided bot token.
 	dg, err := discordgo.New("Bot " + cfg.BotToken)
@@ -157,22 +157,58 @@ func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
 		return nil, err
 	}
 
-	// Register each command function as a global slash command.
+	// Build a comma-separated list of command names for the online message.
+	var availableCommands []string
 	for _, fn := range functions {
-		options, err := structToCommandOptions(fn.GetRequestPrototype())
-		if err != nil {
-			slog.Error("failed to generate command options", "command", fn.GetName(), "error", err)
-			return nil, err
+		availableCommands = append(availableCommands, fn.GetName())
+	}
+	commandsMessage := fmt.Sprintf("I'm online! Available commands: %s", strings.Join(availableCommands, ", "))
+
+	// For each guild, register commands and send an online message.
+	guilds := dg.State.Guilds
+	for _, guild := range guilds {
+		// Register each command for this guild.
+		for _, fn := range functions {
+			options, err := structToCommandOptions(fn.GetRequestPrototype())
+			if err != nil {
+				slog.Error("failed to generate command options", "command", fn.GetName(), "error", err)
+				return nil, err
+			}
+			slog.Debug("initialising function", "name", fn.GetName(), "options", options, "guild", guild.ID)
+			cmd := &discordgo.ApplicationCommand{
+				Name:        fn.GetName(),
+				Description: "Auto-generated command for " + fn.GetName(),
+				Options:     options,
+			}
+			// Pass the guild ID here so the command is registered only for that guild.
+			_, err = dg.ApplicationCommandCreate(cfg.AppID, guild.ID, cmd)
+			if err != nil {
+				slog.Error("failed to create slash command", "command", fn.GetName(), "error", err)
+				return nil, err
+			}
 		}
-		cmd := &discordgo.ApplicationCommand{
-			Name:        fn.GetName(),
-			Description: "Auto-generated command for " + fn.GetName(),
-			Options:     options,
-		}
-		_, err = dg.ApplicationCommandCreate(cfg.AppID, "", cmd)
+
+		// Find a text channel in the guild to send the online message.
+		channels, err := dg.GuildChannels(guild.ID)
 		if err != nil {
-			slog.Error("failed to create slash command", "command", fn.GetName(), "error", err)
-			// Decide whether to continue or fail immediately.
+			slog.Error("failed to get guild channels", "guild", guild.ID, "error", err)
+			continue // Skip sending message if channels cannot be fetched.
+		}
+
+		var targetChannel string
+		for _, channel := range channels {
+			if channel.Type == discordgo.ChannelTypeGuildText {
+				targetChannel = channel.ID
+				break
+			}
+		}
+
+		// If a target channel was found, send the online message.
+		if targetChannel != "" {
+			_, err = dg.ChannelMessageSend(targetChannel, commandsMessage)
+			if err != nil {
+				slog.Error("failed to send online message", "guild", guild.ID, "error", err)
+			}
 		}
 	}
 
@@ -196,6 +232,8 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 // onInteractionCreate routes interactions to the correct BotFunction based on the command name.
 func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	cmdData := i.ApplicationCommandData()
+
+	slog.Debug("received interaction", "cmd", cmdData)
 
 	// Find the registered function with a matching name.
 	var fn BotFunctionI

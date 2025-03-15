@@ -5,6 +5,7 @@ go 1.23.3
 require (
 	github.com/GoogleCloudPlatform/functions-framework-go v1.9.1
 	github.com/bwmarrin/discordgo v0.28.1
+	github.com/fatih/color v1.18.0
 	github.com/lmittmann/tint v1.0.7
 	github.com/mattn/go-colorable v0.1.14
 )
