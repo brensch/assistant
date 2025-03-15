@@ -1,0 +1,1 @@
+Notifies me when I'm zapped.
