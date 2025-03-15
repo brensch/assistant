@@ -13,7 +13,7 @@ import (
 func main() {
 	// Configure pretty colored logging with tint
 	handler := tint.NewHandler(colorable.NewColorableStdout(), &tint.Options{
-		Level:      slog.LevelInfo,
+		Level:      slog.LevelDebug,
 		TimeFormat: "15:04:05.000",
 		AddSource:  true,
 	})

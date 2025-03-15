@@ -16,7 +16,6 @@ type BotConfig struct {
 type Bot struct {
 	session *discordgo.Session
 	config  BotConfig
-	logger  *slog.Logger
 }
 
 // NewBot creates a new Bot instance, opens a websocket session, registers a global slash command,
@@ -34,7 +33,6 @@ func NewBot(cfg BotConfig) (*Bot, error) {
 	bot := &Bot{
 		session: dg,
 		config:  cfg,
-		logger:  slog.Default(),
 	}
 
 	// Register event handlers.
@@ -52,24 +50,24 @@ func NewBot(cfg BotConfig) (*Bot, error) {
 		Description: "Say hi to the bot",
 	})
 	if err != nil {
-		bot.logger.Error("failed to create slash command", "command", "sayhi", "error", err)
+		slog.Error("failed to create slash command", "command", "sayhi", "error", err)
 	}
 
 	// List all guilds (builds) and send a greeting message to each guild's system channel (if available).
 	guilds := dg.State.Guilds
 	for _, g := range guilds {
-		bot.logger.Info("bot presence detected in guild", "guild_name", g.Name, "guild_id", g.ID)
+		slog.Info("bot presence detected in guild", "guild_name", g.Name, "guild_id", g.ID)
 
 		if g.SystemChannelID != "" {
 			_, err = dg.ChannelMessageSend(g.SystemChannelID, "Bot is online! Use /sayhi to interact with me.")
 			if err != nil {
-				bot.logger.Error("failed to send greeting message",
+				slog.Error("failed to send greeting message",
 					"guild_id", g.ID,
 					"channel_id", g.SystemChannelID,
 					"error", err)
 			}
 		} else {
-			bot.logger.Warn("unable to send greeting, no system channel configured",
+			slog.Warn("unable to send greeting, no system channel configured",
 				"guild_id", g.ID,
 				"guild_name", g.Name)
 		}
@@ -84,7 +82,7 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 		return
 	}
 
-	b.logger.Debug("message received",
+	slog.Debug("message received",
 		"author", m.Author.Username,
 		"author_id", m.Author.ID,
 		"channel_id", m.ChannelID,
@@ -111,7 +109,7 @@ func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.Interaction
 	// Use ApplicationCommandData() to obtain command-specific data.
 	cmdData := i.ApplicationCommandData()
 
-	b.logger.Info("interaction received",
+	slog.Info("interaction received",
 		"username", username,
 		"user_id", userID,
 		"command", cmdData.Name,
@@ -127,7 +125,7 @@ func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.Interaction
 		})
 
 		if err != nil {
-			b.logger.Error("failed to respond to interaction",
+			slog.Error("failed to respond to interaction",
 				"command", "sayhi",
 				"user_id", userID,
 				"interaction_id", i.ID,
@@ -138,6 +136,6 @@ func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.Interaction
 
 // Close gracefully closes the Discord session.
 func (b *Bot) Close() error {
-	b.logger.Info("shutting down bot")
+	slog.Info("shutting down bot")
 	return b.session.Close()
 }
