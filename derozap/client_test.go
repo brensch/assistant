@@ -1,7 +1,6 @@
 package derozap_test
 
 import (
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -55,7 +54,8 @@ func TestClientIntegration(t *testing.T) {
 
 	// Fetch tag reads for the specified date range
 	tagReads, err := client.FetchTagReads(
-		derozap.WithDateRange(startDateStr, endDateStr),
+		// note if i want to filter for whatever reason can use this.
+		// derozap.WithDateRange(startDateStr, endDateStr),
 		derozap.WithResultsPerPage(50),
 	)
 
@@ -91,59 +91,4 @@ func TestClientIntegration(t *testing.T) {
 	}
 
 	t.Logf("Found %d unique dates and %d unique tag IDs", len(dates), len(tags))
-}
-
-// Example usage to run the test manually
-func Example_clientIntegration() {
-	// Set credentials
-	username := "your.email@example.com"
-	password := "your-password"
-
-	// Create client
-	client, err := derozap.NewClient(username, password)
-	if err != nil {
-		fmt.Printf("Error creating client: %v\n", err)
-		return
-	}
-
-	// Login
-	err = client.Login()
-	if err != nil {
-		fmt.Printf("Login failed: %v\n", err)
-		return
-	}
-
-	fmt.Println("Successfully logged in")
-
-	// Set date range for last 30 days
-	endDate := time.Now()
-	startDate := endDate.AddDate(0, 0, -30)
-	startDateStr := startDate.Format("01/02/2006")
-	endDateStr := endDate.Format("01/02/2006")
-
-	// Fetch tag reads
-	tagReads, err := client.FetchTagReads(
-		derozap.WithDateRange(startDateStr, endDateStr),
-		derozap.WithResultsPerPage(50),
-	)
-
-	if err != nil {
-		fmt.Printf("Failed to fetch tag reads: %v\n", err)
-		return
-	}
-
-	fmt.Printf("Successfully fetched %d tag reads\n", len(tagReads))
-
-	// Print first few results
-	if len(tagReads) > 0 {
-		fmt.Println("First 5 tag reads:")
-		limit := 5
-		if len(tagReads) < limit {
-			limit = len(tagReads)
-		}
-
-		for i := 0; i < limit; i++ {
-			fmt.Printf("  %d. Date: %s, Tag: %s\n", i+1, tagReads[i].Date, tagReads[i].TagID)
-		}
-	}
 }

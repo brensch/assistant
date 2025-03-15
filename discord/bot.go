@@ -22,7 +22,7 @@ type BotConfig struct {
 	BotToken string
 }
 
-// NewBot creates a new Bot instance, registers each command function globally,
+// NewBot creates a new Bot instance, re-registers each command function on a per-guild basis,
 // and sends an online message listing all available commands to each guild.
 func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
 	// Create a new Discord session using the provided bot token.
@@ -54,26 +54,43 @@ func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
 	for _, fn := range functions {
 		availableCommands = append(availableCommands, fn.GetName())
 	}
-	commandsMessage := fmt.Sprintf("I'm online! Available commands: %s", strings.Join(availableCommands, ", "))
+	commandsMessage := fmt.Sprintf("Assistant online. Available commands: %s", strings.Join(availableCommands, ", "))
 
-	// Register each command globally by using an empty guild ID.
-	for _, fn := range functions {
-		options, err := structToCommandOptions(fn.GetRequestPrototype())
+	// For each guild, delete all existing bot commands and register new ones.
+	for _, guild := range dg.State.Guilds {
+		// Retrieve the existing commands for the guild.
+		existingCommands, err := dg.ApplicationCommands(cfg.AppID, guild.ID)
 		if err != nil {
-			slog.Error("failed to generate command options", "command", fn.GetName(), "error", err)
-			return nil, err
+			slog.Error("failed to get commands for guild", "guild", guild.ID, "error", err)
+			continue
 		}
-		slog.Debug("initialising function", "name", fn.GetName(), "options", options)
-		cmd := &discordgo.ApplicationCommand{
-			Name:        fn.GetName(),
-			Description: "Auto-generated command for " + fn.GetName(),
-			Options:     options,
+		// Delete each existing command.
+		for _, cmd := range existingCommands {
+			err := dg.ApplicationCommandDelete(cfg.AppID, guild.ID, cmd.ID)
+			if err != nil {
+				slog.Error("failed to delete command", "guild", guild.ID, "command", cmd.Name, "error", err)
+			} else {
+				slog.Debug("deleted command", "guild", guild.ID, "command", cmd.Name)
+			}
 		}
-		// Pass an empty string as the guild ID for global registration.
-		_, err = dg.ApplicationCommandCreate(cfg.AppID, "", cmd)
-		if err != nil {
-			slog.Error("failed to create global slash command", "command", fn.GetName(), "error", err)
-			return nil, err
+		// Register each new command for this guild.
+		for _, fn := range functions {
+			options, err := structToCommandOptions(fn.GetRequestPrototype())
+			if err != nil {
+				slog.Error("failed to generate command options", "command", fn.GetName(), "error", err)
+				return nil, err
+			}
+			slog.Debug("initialising function", "name", fn.GetName(), "options", options)
+			newCmd := &discordgo.ApplicationCommand{
+				Name:        fn.GetName(),
+				Description: "Auto-generated command for " + fn.GetName(),
+				Options:     options,
+			}
+			_, err = dg.ApplicationCommandCreate(cfg.AppID, guild.ID, newCmd)
+			if err != nil {
+				slog.Error("failed to create guild slash command", "guild", guild.ID, "command", fn.GetName(), "error", err)
+				return nil, err
+			}
 		}
 	}
 

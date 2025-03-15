@@ -41,9 +41,13 @@ func (h *PrettyHandler) Handle(ctx context.Context, r slog.Record) error {
 		return true
 	})
 
-	b, err := json.Marshal(fields)
-	if err != nil {
-		return err
+	var err error
+	var b []byte
+	if len(fields) > 0 {
+		b, err = json.Marshal(fields)
+		if err != nil {
+			return err
+		}
 	}
 
 	timeStr := r.Time.Format("[15:05:05.000]")

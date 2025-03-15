@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/brensch/assistant/derozap"
 	"github.com/brensch/assistant/discord"
 	"github.com/bwmarrin/discordgo"
 )
@@ -72,6 +73,7 @@ func main() {
 		// The autocomplete parameter is nil here.
 		discord.NewBotFunction("cool", coolHandler, nil),
 		discord.NewBotFunction("boolism", boolismHandler, nil),
+		derozap.DerozapCommand,
 	}
 
 	// Create the bot, providing the configuration and list of functions.
