@@ -25,8 +25,19 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	cfg := discord.BotConfig{
+
+		// ChannelIDs: []string{"channelID1", "channelID2"},
+	}
+	var err error
+	bot, err := discord.NewBot(cfg)
+	if err != nil {
+		// In Cloud Functions, log.Fatal will cause a startup failure.
+		panic(err)
+	}
+
 	// Register the Discord handler
-	http.HandleFunc("/discord", discord.DiscordHandler)
+	http.HandleFunc("/discord", bot.Handler)
 
 	// Start the server in a goroutine
 	go func() {

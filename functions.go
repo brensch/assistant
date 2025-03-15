@@ -10,5 +10,5 @@ import (
 
 func init() {
 	slog.Info("registering functions")
-	functions.HTTP("discordHandler", discord.DiscordHandler)
+	functions.HTTP("discordHandler", discord.Handler)
 }

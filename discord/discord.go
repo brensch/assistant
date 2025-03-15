@@ -1,575 +1,195 @@
-// Package discord provides functionality for handling Discord interactions via Google Cloud Functions
+// Package discord implements a Discord bot with methods for handling interactions
+// and sending messages. It registers a global slash command ("say hi") on initialization.
 package discord
 
 import (
 	"bytes"
-	"crypto/ed25519"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
-	"os"
-	"sync"
-	"time"
 )
 
-// Discord interaction types
+// Constants used in Discord interactions.
 const (
-	InteractionTypePing               = 1
-	InteractionTypeApplicationCommand = 2
-	InteractionTypeMessageComponent   = 3
-	InteractionTypeAutocomplete       = 4
-	InteractionTypeModalSubmit        = 5
+	// Incoming interaction types.
+	PingInteraction    = 1
+	ApplicationCommand = 2
+	// Outgoing response types.
+	PongResponse             = 1
+	ChannelMessageWithSource = 4
 )
 
-// Discord interaction response types
-const (
-	ResponseTypePong                             = 1
-	ResponseTypeChannelMessageWithSource         = 4
-	ResponseTypeDeferredChannelMessageWithSource = 5
-	ResponseTypeDeferredUpdateMessage            = 6
-	ResponseTypeUpdateMessage                    = 7
-	ResponseTypeAutocompleteResult               = 8
-	ResponseTypeModal                            = 9
-)
-
-// Discord message flags
-const (
-	FlagEphemeral = 1 << 6 // Makes response only visible to the sender
-)
-
-// Command option types
-const (
-	OptionTypeSubCommand      = 1
-	OptionTypeSubCommandGroup = 2
-	OptionTypeString          = 3
-	OptionTypeInteger         = 4
-	OptionTypeBoolean         = 5
-	OptionTypeUser            = 6
-	OptionTypeChannel         = 7
-	OptionTypeRole            = 8
-	OptionTypeMentionable     = 9
-	OptionTypeNumber          = 10
-	OptionTypeAttachment      = 11
-)
-
-// Interaction represents a Discord interaction
+// Interaction represents a minimal Discord interaction payload.
 type Interaction struct {
-	ID            string          `json:"id"`
-	ApplicationID string          `json:"application_id"`
-	Type          int             `json:"type"`
-	Data          json.RawMessage `json:"data"` // Data structure varies based on interaction type
-	GuildID       string          `json:"guild_id,omitempty"`
-	ChannelID     string          `json:"channel_id,omitempty"`
-	Member        json.RawMessage `json:"member,omitempty"`
-	User          json.RawMessage `json:"user,omitempty"`
-	Token         string          `json:"token"`
-	Version       int             `json:"version"`
-	Message       json.RawMessage `json:"message,omitempty"`
+	Type  int              `json:"type"`
+	Data  *InteractionData `json:"data,omitempty"`
+	Token string           `json:"token"`
+	ID    string           `json:"id"`
 }
 
-// ApplicationCommandData represents the data for an application command interaction
-type ApplicationCommandData struct {
-	ID      string                     `json:"id"`
-	Name    string                     `json:"name"`
-	Type    int                        `json:"type"`
-	Options []ApplicationCommandOption `json:"options,omitempty"`
+// InteractionData holds data for application commands.
+type InteractionData struct {
+	Name string `json:"name"`
 }
 
-// ApplicationCommandOption represents an option for an application command
-type ApplicationCommandOption struct {
-	Name    string                     `json:"name"`
-	Type    int                        `json:"type"`
-	Value   interface{}                `json:"value,omitempty"`
-	Options []ApplicationCommandOption `json:"options,omitempty"`
-	Focused bool                       `json:"focused,omitempty"` // Used for autocomplete
-}
-
-// InteractionResponse represents a response to a Discord interaction
+// InteractionResponse is used to respond to an interaction.
 type InteractionResponse struct {
-	Type int                     `json:"type"`
-	Data InteractionResponseData `json:"data,omitempty"`
+	Type int                      `json:"type"`
+	Data *InteractionCallbackData `json:"data,omitempty"`
 }
 
-// InteractionResponseData represents the data for an interaction response
-type InteractionResponseData struct {
-	TTS             bool             `json:"tts,omitempty"`
-	Content         string           `json:"content,omitempty"`
-	Embeds          []Embed          `json:"embeds,omitempty"`
-	AllowedMentions *AllowedMentions `json:"allowed_mentions,omitempty"`
-	Flags           int              `json:"flags,omitempty"`
-	Components      []Component      `json:"components,omitempty"`
+// InteractionCallbackData holds the message to be sent back.
+type InteractionCallbackData struct {
+	Content string `json:"content"`
 }
 
-// Embed represents a Discord embed
-type Embed struct {
-	Title       string       `json:"title,omitempty"`
-	Description string       `json:"description,omitempty"`
-	URL         string       `json:"url,omitempty"`
-	Timestamp   string       `json:"timestamp,omitempty"`
-	Color       int          `json:"color,omitempty"`
-	Footer      *EmbedFooter `json:"footer,omitempty"`
-	Image       *EmbedImage  `json:"image,omitempty"`
-	Thumbnail   *EmbedImage  `json:"thumbnail,omitempty"`
-	Author      *EmbedAuthor `json:"author,omitempty"`
-	Fields      []EmbedField `json:"fields,omitempty"`
+// CommandPayload defines the JSON structure for a slash command.
+type CommandPayload struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// You can add options here if needed.
 }
 
-// EmbedFooter represents the footer of a Discord embed
-type EmbedFooter struct {
-	Text    string `json:"text"`
-	IconURL string `json:"icon_url,omitempty"`
+// Bot holds configuration for your Discord bot.
+type Bot struct {
+	AppID      string
+	BotToken   string
+	ChannelIDs []string
 }
 
-// EmbedImage represents an image in a Discord embed
-type EmbedImage struct {
-	URL string `json:"url"`
+// BotConfig holds parameters used to initialize a Bot.
+type BotConfig struct {
+	AppID      string
+	BotToken   string
+	ChannelIDs []string
 }
 
-// EmbedAuthor represents the author of a Discord embed
-type EmbedAuthor struct {
-	Name    string `json:"name"`
-	URL     string `json:"url,omitempty"`
-	IconURL string `json:"icon_url,omitempty"`
-}
-
-// EmbedField represents a field in a Discord embed
-type EmbedField struct {
-	Name   string `json:"name"`
-	Value  string `json:"value"`
-	Inline bool   `json:"inline,omitempty"`
-}
-
-// AllowedMentions controls which mentions are allowed in a message
-type AllowedMentions struct {
-	Parse       []string `json:"parse,omitempty"`
-	Roles       []string `json:"roles,omitempty"`
-	Users       []string `json:"users,omitempty"`
-	RepliedUser bool     `json:"replied_user,omitempty"`
-}
-
-// Component represents a Discord message component
-type Component struct {
-	Type        int         `json:"type"`
-	CustomID    string      `json:"custom_id,omitempty"`
-	Label       string      `json:"label,omitempty"`
-	Style       int         `json:"style,omitempty"`
-	Emoji       *Emoji      `json:"emoji,omitempty"`
-	URL         string      `json:"url,omitempty"`
-	Disabled    bool        `json:"disabled,omitempty"`
-	Components  []Component `json:"components,omitempty"`
-	Options     []Option    `json:"options,omitempty"`
-	Placeholder string      `json:"placeholder,omitempty"`
-	MinValues   *int        `json:"min_values,omitempty"`
-	MaxValues   *int        `json:"max_values,omitempty"`
-}
-
-// Emoji represents a Discord emoji
-type Emoji struct {
-	ID       string `json:"id,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Animated bool   `json:"animated,omitempty"`
-}
-
-// Option represents a select menu option
-type Option struct {
-	Label       string `json:"label"`
-	Value       string `json:"value"`
-	Description string `json:"description,omitempty"`
-	Emoji       *Emoji `json:"emoji,omitempty"`
-	Default     bool   `json:"default,omitempty"`
-}
-
-// CommandHandler is a function type that handles Discord commands
-type CommandHandler func(interaction *Interaction, options []ApplicationCommandOption) (*InteractionResponse, error)
-
-// Command defines a Discord slash command
-type Command struct {
-	Name        string
-	Description string
-	Options     []CommandOption
-	Handler     CommandHandler
-}
-
-// CommandOption defines an option for a Discord slash command
-type CommandOption struct {
-	Name        string
-	Description string
-	Type        int
-	Required    bool
-	Choices     []CommandChoice
-	Options     []CommandOption // For subcommands
-}
-
-// CommandChoice defines a choice for a command option
-type CommandChoice struct {
-	Name  string
-	Value interface{}
-}
-
-// CommandRegistry stores and manages available commands
-type CommandRegistry struct {
-	commands map[string]*Command
-	mu       sync.RWMutex
-}
-
-// NewCommandRegistry creates a new command registry
-func NewCommandRegistry() *CommandRegistry {
-	return &CommandRegistry{
-		commands: make(map[string]*Command),
-	}
-}
-
-// RegisterCommand adds a command to the registry
-func (r *CommandRegistry) RegisterCommand(cmd *Command) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.commands[cmd.Name] = cmd
-}
-
-// GetCommand retrieves a command by name
-func (r *CommandRegistry) GetCommand(name string) (*Command, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	cmd, ok := r.commands[name]
-	return cmd, ok
-}
-
-// ListCommands returns all registered commands
-func (r *CommandRegistry) ListCommands() []*Command {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	cmds := make([]*Command, 0, len(r.commands))
-	for _, cmd := range r.commands {
-		cmds = append(cmds, cmd)
-	}
-	return cmds
-}
-
-// Global registry for commands
-var Registry = NewCommandRegistry()
-
-// DiscordHandler is the main HTTP handler for Discord interactions
-func DiscordHandler(w http.ResponseWriter, r *http.Request) {
-
-	fmt.Println("got request")
-
-	// Only accept POST requests
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+// NewBot creates a new Bot instance. It registers a global slash command ("say hi")
+// so that Discord knows to send interactions to your endpoint.
+func NewBot(cfg BotConfig) (*Bot, error) {
+	bot := &Bot{
+		AppID:      cfg.AppID,
+		BotToken:   cfg.BotToken,
+		ChannelIDs: cfg.ChannelIDs,
 	}
 
-	// In production, verify the request signature
-	if os.Getenv("ENVIRONMENT") != "development" {
-		if !verifySignature(r) {
-			http.Error(w, "Invalid request signature", http.StatusUnauthorized)
-			return
-		}
-	}
-
-	// Read the request body
-	body, err := ioutil.ReadAll(r.Body)
+	// Register the global command "say hi".
+	err := bot.registerGlobalCommand(CommandPayload{
+		Name:        "say hi",
+		Description: "Replies with hi",
+	})
 	if err != nil {
-		log.Printf("Error reading request body: %v", err)
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
-		return
+		return nil, fmt.Errorf("failed to register global command: %w", err)
 	}
-	// Replace the request body for later use
-	r.Body = ioutil.NopCloser(bytes.NewBuffer(body))
-
-	// Parse the interaction
-	var interaction Interaction
-	if err := json.Unmarshal(body, &interaction); err != nil {
-		log.Printf("Error parsing interaction: %v", err)
-		http.Error(w, "Invalid interaction format", http.StatusBadRequest)
-		return
-	}
-
-	// Handle different interaction types
-	var response *InteractionResponse
-
-	switch interaction.Type {
-	case InteractionTypePing:
-		// Respond to ping with pong (required for Discord verification)
-		response = &InteractionResponse{
-			Type: ResponseTypePong,
-		}
-	case InteractionTypeApplicationCommand:
-		// Handle application command
-		response = handleCommand(&interaction)
-	default:
-		// Unsupported interaction type
-		log.Printf("Unsupported interaction type: %d", interaction.Type)
-		response = &InteractionResponse{
-			Type: ResponseTypeChannelMessageWithSource,
-			Data: InteractionResponseData{
-				Content: "This interaction type is not supported yet.",
-				Flags:   FlagEphemeral, // Only visible to the user who triggered it
-			},
-		}
-	}
-
-	// Send the response
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding response: %v", err)
-		http.Error(w, "Error encoding response", http.StatusInternalServerError)
-		return
-	}
+	return bot, nil
 }
 
-// verifySignature verifies the signature of a Discord interaction request
-func verifySignature(r *http.Request) bool {
-	// Get the public key from environment variables
-	// publicKey := os.Getenv("DISCORD_PUBLIC_KEY")
-	// if publicKey == "" {
-	// 	log.Println("DISCORD_PUBLIC_KEY environment variable not set")
-	// 	return false
-	// }
-	publicKey := pubKey
-
-	// Get the signature and timestamp from headers
-	signature := r.Header.Get("X-Signature-Ed25519")
-	timestamp := r.Header.Get("X-Signature-Timestamp")
-
-	if signature == "" || timestamp == "" {
-		log.Println("Missing signature or timestamp headers")
-		return false
-	}
-
-	// Read the request body
-	body, err := ioutil.ReadAll(r.Body)
+// registerGlobalCommand registers a global slash command with Discord.
+func (b *Bot) registerGlobalCommand(payload CommandPayload) error {
+	url := fmt.Sprintf("https://discord.com/api/v10/applications/%s/commands", b.AppID)
+	body, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("Error reading request body: %v", err)
-		return false
+		return err
 	}
-	// Replace the request body for later use
-	r.Body = ioutil.NopCloser(bytes.NewBuffer(body))
 
-	// Decode the signature
-	signatureBytes, err := hex.DecodeString(signature)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	if err != nil {
-		log.Printf("Error decoding signature: %v", err)
-		return false
+		return err
 	}
-
-	// Decode the public key
-	pubKeyBytes, err := hex.DecodeString(publicKey)
-	if err != nil {
-		log.Printf("Error decoding public key: %v", err)
-		return false
-	}
-
-	// Verify the signature
-	message := []byte(timestamp + string(body))
-	return ed25519.Verify(pubKeyBytes, message, signatureBytes)
-}
-
-// handleCommand processes command interactions
-func handleCommand(interaction *Interaction) *InteractionResponse {
-	// Parse the command data
-	var cmdData ApplicationCommandData
-	if err := json.Unmarshal(interaction.Data, &cmdData); err != nil {
-		log.Printf("Error parsing command data: %v", err)
-		return errorResponse("Failed to parse command data")
-	}
-
-	// Find the command in the registry
-	cmd, ok := Registry.GetCommand(cmdData.Name)
-	if !ok {
-		log.Printf("Unknown command: %s", cmdData.Name)
-		return errorResponse(fmt.Sprintf("Unknown command: %s", cmdData.Name))
-	}
-
-	// Execute the command handler
-	response, err := cmd.Handler(interaction, cmdData.Options)
-	if err != nil {
-		log.Printf("Error handling command %s: %v", cmdData.Name, err)
-		return errorResponse(fmt.Sprintf("Error executing command: %v", err))
-	}
-
-	return response
-}
-
-// errorResponse creates a simple error response
-func errorResponse(message string) *InteractionResponse {
-	return &InteractionResponse{
-		Type: ResponseTypeChannelMessageWithSource,
-		Data: InteractionResponseData{
-			Content: message,
-			Flags:   FlagEphemeral, // Only visible to the user who triggered it
-		},
-	}
-}
-
-// GetOptionValue retrieves an option value by name
-func GetOptionValue(options []ApplicationCommandOption, name string) (interface{}, bool) {
-	for _, opt := range options {
-		if opt.Name == name {
-			return opt.Value, true
-		}
-
-		// Check in sub-options if present
-		if len(opt.Options) > 0 {
-			if val, found := GetOptionValue(opt.Options, name); found {
-				return val, true
-			}
-		}
-	}
-	return nil, false
-}
-
-// RegisterCommand adds a command to the global registry
-func RegisterCommand(cmd *Command) {
-	Registry.RegisterCommand(cmd)
-}
-
-// SendFollowupMessage sends a followup message after an interaction
-func SendFollowupMessage(applicationID, interactionToken string, message InteractionResponseData) error {
-	url := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s", applicationID, interactionToken)
-	return sendWebhookRequest("POST", url, message)
-}
-
-// EditOriginalResponse edits the original interaction response
-func EditOriginalResponse(applicationID, interactionToken string, message InteractionResponseData) error {
-	url := fmt.Sprintf("https://discord.com/api/v10/webhooks/%s/%s/messages/@original", applicationID, interactionToken)
-	return sendWebhookRequest("PATCH", url, message)
-}
-
-// sendWebhookRequest sends a request to Discord's webhook API
-func sendWebhookRequest(method, url string, data interface{}) error {
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("failed to marshal webhook data: %w", err)
-	}
-
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
+	req.Header.Set("Authorization", "Bot "+b.BotToken)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send webhook request: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyBytes, _ := ioutil.ReadAll(resp.Body)
-		return fmt.Errorf("webhook request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		return fmt.Errorf("failed to register command, status: %s", resp.Status)
 	}
-
 	return nil
 }
 
-// CommandBuilder provides a fluent API for building commands
-type CommandBuilder struct {
-	cmd *Command
-}
-
-// NewCommand creates a new command builder
-func NewCommand(name, description string) *CommandBuilder {
-	return &CommandBuilder{
-		cmd: &Command{
-			Name:        name,
-			Description: description,
-			Options:     []CommandOption{},
-		},
+// Handler is an HTTP handler method for processing Discord interactions.
+// For the slash command "say hi", it replies with the text "hi".
+func (b *Bot) Handler(w http.ResponseWriter, r *http.Request) {
+	// Read the request body.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Error reading body: %v", err)
+		http.Error(w, "could not read body", http.StatusBadRequest)
+		return
 	}
-}
+	defer r.Body.Close()
 
-// AddOption adds an option to the command
-func (b *CommandBuilder) AddOption(name, description string, optType int, required bool) *CommandBuilder {
-	b.cmd.Options = append(b.cmd.Options, CommandOption{
-		Name:        name,
-		Description: description,
-		Type:        optType,
-		Required:    required,
-	})
-	return b
-}
+	// Parse the JSON payload.
+	var interaction Interaction
+	if err := json.Unmarshal(body, &interaction); err != nil {
+		log.Printf("Error parsing JSON: %v", err)
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
 
-// AddStringOption adds a string option to the command
-func (b *CommandBuilder) AddStringOption(name, description string, required bool) *CommandBuilder {
-	return b.AddOption(name, description, OptionTypeString, required)
-}
+	// Respond to Discord's PING.
+	if interaction.Type == PingInteraction {
+		resp := InteractionResponse{Type: PongResponse}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
 
-// AddIntegerOption adds an integer option to the command
-func (b *CommandBuilder) AddIntegerOption(name, description string, required bool) *CommandBuilder {
-	return b.AddOption(name, description, OptionTypeInteger, required)
-}
-
-// AddBooleanOption adds a boolean option to the command
-func (b *CommandBuilder) AddBooleanOption(name, description string, required bool) *CommandBuilder {
-	return b.AddOption(name, description, OptionTypeBoolean, required)
-}
-
-// AddUserOption adds a user option to the command
-func (b *CommandBuilder) AddUserOption(name, description string, required bool) *CommandBuilder {
-	return b.AddOption(name, description, OptionTypeUser, required)
-}
-
-// WithHandler sets the command handler
-func (b *CommandBuilder) WithHandler(handler CommandHandler) *CommandBuilder {
-	b.cmd.Handler = handler
-	return b
-}
-
-// Register registers the command with the global registry
-func (b *CommandBuilder) Register() *Command {
-	RegisterCommand(b.cmd)
-	return b.cmd
-}
-
-// Initialize default commands
-func init() {
-	// Register a ping command as an example
-	NewCommand("ping", "Check if the bot is responding").
-		WithHandler(func(interaction *Interaction, options []ApplicationCommandOption) (*InteractionResponse, error) {
-			return &InteractionResponse{
-				Type: ResponseTypeChannelMessageWithSource,
-				Data: InteractionResponseData{
-					Content: "Pong! Bot is up and running.",
+	// Process application commands.
+	if interaction.Type == ApplicationCommand && interaction.Data != nil {
+		if interaction.Data.Name == "say hi" {
+			resp := InteractionResponse{
+				Type: ChannelMessageWithSource,
+				Data: &InteractionCallbackData{
+					Content: "hi",
 				},
-			}, nil
-		}).
-		Register()
-
-	// Register a help command to show available commands
-	NewCommand("help", "Display available commands").
-		WithHandler(func(interaction *Interaction, options []ApplicationCommandOption) (*InteractionResponse, error) {
-			commands := Registry.ListCommands()
-
-			// Create an embed with all commands
-			fields := make([]EmbedField, 0, len(commands))
-			for _, cmd := range commands {
-				fields = append(fields, EmbedField{
-					Name:   "/" + cmd.Name,
-					Value:  cmd.Description,
-					Inline: false,
-				})
 			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}
 
-			return &InteractionResponse{
-				Type: ResponseTypeChannelMessageWithSource,
-				Data: InteractionResponseData{
-					Embeds: []Embed{
-						{
-							Title:       "Available Commands",
-							Description: fmt.Sprintf("Here are the %d available commands:", len(commands)),
-							Color:       0x3498db, // Blue color
-							Fields:      fields,
-						},
-					},
-				},
-			}, nil
-		}).
-		Register()
+	// For any other interactions, simply return 200 OK.
+	w.WriteHeader(http.StatusOK)
+}
+
+// SendMessage sends the given message to every channel listed in the Bot's ChannelIDs.
+// It makes an HTTP POST to Discord's channel messages endpoint for each channel.
+func (b *Bot) SendMessage(message string) error {
+	for _, channelID := range b.ChannelIDs {
+		url := fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", channelID)
+		payload := map[string]string{
+			"content": message,
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("failed to marshal payload: %w", err)
+		}
+
+		req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bot "+b.BotToken)
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("Error sending message to channel %s: %v", channelID, err)
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			log.Printf("Non-2xx response sending message to channel %s: %s", channelID, resp.Status)
+		}
+		_ = resp.Body.Close()
+	}
+	return nil
 }
