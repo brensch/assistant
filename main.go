@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/brensch/assistant/config" // New import
 	"github.com/brensch/assistant/db"
 	"github.com/brensch/assistant/derozap"
 	"github.com/brensch/assistant/discord"
@@ -30,8 +31,12 @@ func main() {
 	// Log startup message.
 	slog.Info("Discord Bot Starting")
 
+	// Load configuration
+	cfg := config.Get()
+	slog.Info("Configuration loaded successfully")
+
 	// Create the database directory if it doesn't exist
-	dbDir := "./dbfiles"
+	dbDir := cfg.Database.Directory
 	os.MkdirAll(dbDir, 0755)
 
 	// Try using in-memory mode first to test if DuckDB works
@@ -94,25 +99,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Get bot token from environment.
-	botToken := os.Getenv("BOTTOKEN")
-	if botToken == "" {
-		slog.Error("BOTTOKEN environment variable not set")
-		os.Exit(1)
+	// Configure and start the bot using config values
+	discordCfg := discord.BotConfig{
+		AppID:    cfg.Discord.AppID,
+		BotToken: cfg.Discord.BotToken,
 	}
 
-	// Configure and start the bot.
-	cfg := discord.BotConfig{
-		AppID:    "1349959098543767602",
-		BotToken: botToken,
-	}
+	slog.Info("Initializing bot", "app_id", discordCfg.AppID, "token_prefix", discordCfg.BotToken[:5]+"...")
 
-	slog.Info("Initializing bot", "app_id", cfg.AppID, "token_prefix", botToken[:5]+"...")
-
-	deroZapUser := os.Getenv("DEROUSER")
-	deroZapPass := os.Getenv("DEROPASS")
-
-	deroClient, err := derozap.NewClient(deroZapUser, deroZapPass, dbClient)
+	// Use config values for DERO client
+	deroClient, err := derozap.NewClient(cfg.Dero.Username, cfg.Dero.Password, dbClient)
 	if err != nil {
 		slog.Error("failed to init dero zap", "err", err)
 		os.Exit(1)
@@ -121,7 +117,6 @@ func main() {
 	// Create a slice of bot functions using generics.
 	functions := []discord.BotFunctionI{
 		// The autocomplete parameter is nil here.
-
 		deroClient.DiscordFunctionRetrieveZaps(),
 	}
 
@@ -131,7 +126,7 @@ func main() {
 	}
 
 	// Create the bot, providing the configuration and list of functions.
-	bot, err := discord.NewBot(cfg, functions, schedules)
+	bot, err := discord.NewBot(discordCfg, functions, schedules)
 	if err != nil {
 		slog.Error("Failed to create bot", "error", err)
 		os.Exit(1)
