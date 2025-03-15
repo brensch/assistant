@@ -1,9 +1,7 @@
 package discord
 
 import (
-	"encoding/json"
 	"log"
-	"net/http"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -106,46 +104,4 @@ func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.Interaction
 			log.Printf("Failed to respond to sayhi interaction: %v", err)
 		}
 	}
-}
-
-// Handler serves as the HTTP endpoint for Discord interactions.
-func (b *Bot) Handler(w http.ResponseWriter, r *http.Request) {
-	var interaction discordgo.Interaction
-	if err := json.NewDecoder(r.Body).Decode(&interaction); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	// Use ApplicationCommandData() to get the command name.
-	cmdData := interaction.ApplicationCommandData()
-	log.Printf("HTTP Interaction received: command %s", cmdData.Name)
-
-	// Handle Ping requests.
-	if interaction.Type == discordgo.InteractionPing {
-		// In discordgo v0.28.1, respond with type 1 (Pong).
-		response := discordgo.InteractionResponse{
-			Type: 1, // Pong response.
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	// Handle application commands.
-	if interaction.Type == discordgo.InteractionApplicationCommand {
-		if cmdData.Name == "sayhi" {
-			response := discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Hi there!",
-				},
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-			return
-		}
-	}
-
-	// For any unhandled interactions, return a not-implemented error.
-	http.Error(w, "Not implemented", http.StatusNotImplemented)
 }

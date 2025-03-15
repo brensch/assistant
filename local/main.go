@@ -34,14 +34,14 @@ func main() {
 	cfg := discord.BotConfig{
 		AppID:    "1349959098543767602",
 		BotToken: botToken,
+		// Optionally, supply channel IDs if needed.
 	}
 	bot, err := discord.NewBot(cfg)
 	if err != nil {
 		panic(err)
 	}
 
-	// Register the HTTP handler for Discord interactions.
-	http.HandleFunc("/discord", bot.Handler)
+	_ = bot
 
 	// Start the HTTP server in a goroutine.
 	go func() {
