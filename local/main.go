@@ -15,11 +15,6 @@ type CoolRequest struct {
 	Message string
 }
 
-// BoolismRequest defines the request structure for the "boolism" command.
-type BoolismRequest struct {
-	Flag bool
-}
-
 // coolHandler processes a CoolRequest.
 // It returns a pointer to InteractionResponseData that will be sent as the interaction response.
 func coolHandler(req CoolRequest) (*discordgo.InteractionResponseData, error) {
@@ -27,6 +22,12 @@ func coolHandler(req CoolRequest) (*discordgo.InteractionResponseData, error) {
 	return &discordgo.InteractionResponseData{
 		Content: "Cool command executed with message: " + req.Message,
 	}, nil
+}
+
+// BoolismRequest defines the request structure for the "boolism" command.
+type BoolismRequest struct {
+	Flag  bool
+	Color string `discord:"optional,description:Favorite color,choices:red|Red;blue|Blue;green|Green,default:blue"`
 }
 
 // boolismHandler processes a BoolismRequest.

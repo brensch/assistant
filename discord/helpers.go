@@ -132,3 +132,68 @@ func convertType(val string, t reflect.Type) (reflect.Value, error) {
 		return reflect.Value{}, fmt.Errorf("unsupported type for default conversion: %s", t.Kind())
 	}
 }
+
+// structToCommandOptions uses reflection to generate Discord command options from a request struct.
+// It also uses custom struct tags (key "discord") for options like optional, choices, description, and default.
+func structToCommandOptions(req Request) ([]*discordgo.ApplicationCommandOption, error) {
+	t := reflect.TypeOf(req)
+	// If req is a pointer, get the underlying value and type.
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("request is not a struct")
+	}
+
+	var options []*discordgo.ApplicationCommandOption
+	// Iterate over struct fields.
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		optionName := strings.ToLower(field.Name)
+		var optionType discordgo.ApplicationCommandOptionType
+
+		// Map common Go types to Discord option types.
+		switch field.Type.Kind() {
+		case reflect.String:
+			optionType = discordgo.ApplicationCommandOptionString
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			optionType = discordgo.ApplicationCommandOptionInteger
+		case reflect.Float32, reflect.Float64:
+			optionType = discordgo.ApplicationCommandOptionNumber
+		case reflect.Bool:
+			optionType = discordgo.ApplicationCommandOptionBoolean
+		default:
+			optionType = discordgo.ApplicationCommandOptionString
+		}
+
+		// Defaults.
+		required := true
+		description := "Auto-generated option for " + optionName
+		var choices []*discordgo.ApplicationCommandOptionChoice
+
+		// Parse custom struct tag if present.
+		if tagValue := field.Tag.Get("discord"); tagValue != "" {
+			tags := parseDiscordTag(tagValue)
+			if _, ok := tags["optional"]; ok {
+				required = false
+			}
+			if desc, ok := tags["description"]; ok && desc != "" {
+				description = desc
+			}
+			if choicesStr, ok := tags["choices"]; ok && choicesStr != "" {
+				choices = parseChoices(choicesStr)
+			}
+		}
+
+		opt := &discordgo.ApplicationCommandOption{
+			Type:        optionType,
+			Name:        optionName,
+			Description: description,
+			Required:    required,
+			Choices:     choices,
+		}
+		options = append(options, opt)
+	}
+
+	return options, nil
+}
