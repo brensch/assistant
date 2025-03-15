@@ -235,16 +235,13 @@ func (c *Client) FetchTagReads(options ...ReportOption) ([]TagRead, error) {
 }
 
 // storeNewTagReads stores new tag reads in the database.
-func (c *Client) storeNewTagReads(tagReads []TagRead) (int, error) {
-	if len(tagReads) == 0 {
-		return 0, nil
-	}
+func (c *Client) storeNewTagReads(tagReads []TagRead) ([]TagRead, error) {
 
 	// Get the current timestamp
 	now := time.Now()
 
 	// Prepare to track how many new records were added
-	newRecordsCount := 0
+	var newRecords []TagRead
 
 	// Process each tag read
 	for _, tr := range tagReads {
@@ -279,6 +276,7 @@ func (c *Client) storeNewTagReads(tagReads []TagRead) (int, error) {
 
 		// If record doesn't exist, insert it
 		if count == 0 {
+			newRecords = append(newRecords, tr)
 			insertSQL := `INSERT INTO derozap_reads (zap_date, tag_id, recorded_at) VALUES (?, ?, ?)`
 			_, err := c.dbClient.Conn().Exec(insertSQL, formattedDate, tr.TagID, now)
 			if err != nil {
@@ -286,12 +284,11 @@ func (c *Client) storeNewTagReads(tagReads []TagRead) (int, error) {
 				continue
 			}
 
-			newRecordsCount++
 			slog.Info("inserted new tag read", "tag_id", tr.TagID, "date", formattedDate)
 		}
 	}
 
-	return newRecordsCount, nil
+	return newRecords, nil
 }
 
 // parseZapDate parses a date string from the format in tag reads.
@@ -558,36 +555,32 @@ func (c *Client) Start(discordBot DiscordSender) {
 			}
 
 			// Store new tag reads in the database
-			newRecordsCount, err := c.storeNewTagReads(tagReads)
+			newRecords, err := c.storeNewTagReads(tagReads)
 			if err != nil {
 				slog.Error("failed to store tag reads", "error", err)
 				// Continue with Discord notification even if DB storage failed
 			}
 
-			var description string
 			if len(tagReads) == 0 {
-				description = "No tag reads found in the latest report."
-			} else {
-				if newRecordsCount > 0 {
-					description = fmt.Sprintf("Found %d tag reads (%d new entries added to database):\n",
-						len(tagReads), newRecordsCount)
-				} else {
-					description = fmt.Sprintf("Found %d tag reads (no new entries):\n", len(tagReads))
-				}
+				slog.Warn("no tags found")
+				return
+			}
 
-				// Optionally list the first few tag reads.
-				maxItems := 5
-				if len(tagReads) < maxItems {
-					maxItems = len(tagReads)
-				}
-				for i := 0; i < maxItems; i++ {
-					tr := tagReads[i]
-					description += fmt.Sprintf("- Tag %s at %s\n", tr.TagID, tr.Date)
-				}
+			if len(newRecords) == 0 {
+				slog.Debug("no new tags found")
+				return
+			}
+
+			description := fmt.Sprintf("Found %d new record (%d entries total = $%d):\n",
+				len(newRecords), len(tagReads), len(tagReads)*15)
+
+			// Optionally list the first few tag reads.
+			for _, newRecord := range newRecords[:5] {
+				description += newRecord.Date + "\n"
 			}
 
 			reportEmbed := &discordgo.MessageEmbed{
-				Title:       "Dero ZAP Tag Reads Report",
+				Title:       "New dero zaps detected",
 				Description: description,
 				Color:       0x00FF00, // Green for a successful report.
 				Timestamp:   time.Now().Format(time.RFC3339),
