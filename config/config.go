@@ -4,33 +4,26 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 
-	"github.com/go-viper/mapstructure/v2"
-	"github.com/knadh/koanf/parsers/yaml"
-	"github.com/knadh/koanf/providers/confmap"
-	"github.com/knadh/koanf/providers/env"
-	"github.com/knadh/koanf/providers/file"
-	"github.com/knadh/koanf/v2"
+	"gopkg.in/yaml.v3"
 )
 
 // AppConfig holds all configuration for the application
 type AppConfig struct {
 	Discord struct {
-		AppID    string `koanf:"app_id"`
-		BotToken string `koanf:"bot_token"`
-	} `koanf:"discord"`
+		AppID    string `yaml:"app_id"`
+		BotToken string `yaml:"bot_token"`
+	} `yaml:"discord"`
 
 	Dero struct {
-		Username string `koanf:"username"`
-		Password string `koanf:"password"`
-	} `koanf:"dero"`
+		Username string `yaml:"username"`
+		Password string `yaml:"password"`
+	} `yaml:"dero"`
 
 	Database struct {
-		Directory string `koanf:"directory"`
-	} `koanf:"database"`
+		Directory string `yaml:"directory"`
+	} `yaml:"database"`
 }
 
 // Global singleton config instance
@@ -52,67 +45,22 @@ func Get() *AppConfig {
 	return cfg
 }
 
-// Load configuration from various sources with proper precedence
+// Load configuration from .conf file
 func load() (*AppConfig, error) {
-	k := koanf.New(".")
+	// Config file path
+	configFile := ".conf"
+	slog.Info("Loading configuration file", "path", configFile)
 
-	// Default configuration
-	defaultConfig := map[string]interface{}{
-		"discord.app_id":     "1349959098543767602",
-		"database.directory": "./dbfiles",
-	}
-	if err := k.Load(confmap.Provider(defaultConfig, "."), nil); err != nil {
-		return nil, fmt.Errorf("failed to load default config: %w", err)
-	}
-
-	// Configuration file - try multiple locations with fallbacks
-	configLocations := []string{
-		"/etc/app/config.yaml",            // Standard system location
-		"/config/config.yaml",             // Docker mounted volume location
-		filepath.Join(".", "config.yaml"), // Local file in current directory
+	// Read the configuration file
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return nil, fmt.Errorf("error reading config file: %w", err)
 	}
 
-	configLoaded := false
-	for _, loc := range configLocations {
-		if _, err := os.Stat(loc); err == nil {
-			slog.Info("Loading configuration file", "path", loc)
-			if err := k.Load(file.Provider(loc), yaml.Parser()); err != nil {
-				return nil, fmt.Errorf("error loading config file %s: %w", loc, err)
-			}
-			configLoaded = true
-			break
-		}
-	}
-
-	if !configLoaded {
-		slog.Warn("No config file found in any of the expected locations",
-			"searched_locations", configLocations)
-	}
-
-	// Environment variables (highest priority)
-	// Format: APP_DISCORD_BOT_TOKEN -> discord.bot_token
-	callback := func(s string) string {
-		// Convert APP_DISCORD_BOT_TOKEN to discord.bot_token
-		s = strings.Replace(strings.ToLower(s), "app_", "", 1)
-		s = strings.Replace(s, "_", ".", -1)
-		return s
-	}
-
-	if err := k.Load(env.Provider("APP_", ".", callback), nil); err != nil {
-		return nil, fmt.Errorf("error loading environment variables: %w", err)
-	}
-
-	// Create config instance
+	// Parse the YAML
 	var cfg AppConfig
-	decoderConfig := koanf.UnmarshalConf{
-		DecoderConfig: &mapstructure.DecoderConfig{
-			WeaklyTypedInput: true,
-			Result:           &cfg,
-		},
-	}
-
-	if err := k.UnmarshalWithConf("", &cfg, decoderConfig); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("error parsing config file: %w", err)
 	}
 
 	// Log configuration details (with sensitive information redacted)

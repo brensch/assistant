@@ -26,3 +26,5 @@ go.work.sum
 *.db
 *.parquet
 dbfiles/
+
+.conf
