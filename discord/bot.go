@@ -8,10 +8,17 @@ import (
 	"log/slog"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/mitchellh/mapstructure"
 )
 
+// Bot encapsulates the discordgo session, configuration, and registered functions.
+type Bot struct {
+	session   *discordgo.Session
+	config    BotConfig
+	functions []BotFunctionI
+}
+
 // Request is a blank interface for the command request definitions.
-// You may later add common methods here.
 type Request interface{}
 
 // Autocomplete is an interface for types that can provide autocomplete suggestions.
@@ -53,10 +60,35 @@ func (bf *GenericBotFunction[T]) GetRequestPrototype() Request {
 }
 
 // HandleInteraction processes the interaction by constructing a request of type T from the data
-// and then invoking the handler. (For now, the request is not populated from the interaction options.)
+// and then invoking the handler. It decodes the options using mapstructure and then applies any defaults.
 func (bf *GenericBotFunction[T]) HandleInteraction(data *discordgo.ApplicationCommandInteractionData) (*discordgo.InteractionResponseData, error) {
 	var req T
-	// TODO: Decode data.Options into req using, for example, mitchellh/mapstructure.
+
+	// Build a map from option name to its value.
+	optsMap := make(map[string]interface{})
+	for _, opt := range data.Options {
+		optsMap[opt.Name] = opt.Value
+	}
+
+	// Decode into req using mapstructure with our custom tag.
+	decoderConfig := mapstructure.DecoderConfig{
+		TagName:          "discord",
+		Result:           &req,
+		WeaklyTypedInput: true, // helps convert numbers and booleans automatically.
+	}
+	decoder, err := mapstructure.NewDecoder(&decoderConfig)
+	if err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(optsMap); err != nil {
+		return nil, err
+	}
+
+	// Set default values on fields that are still zero.
+	if err := setDefaults(&req); err != nil {
+		return nil, err
+	}
+
 	return bf.Handler(req)
 }
 
@@ -77,20 +109,12 @@ type BotConfig struct {
 	BotToken string
 }
 
-// Bot encapsulates the discordgo session, configuration, and registered functions.
-type Bot struct {
-	session   *discordgo.Session
-	config    BotConfig
-	functions []BotFunctionI
-}
-
 // structToCommandOptions uses reflection to generate Discord command options from a request struct.
+// It also uses custom struct tags (key "discord") for options like optional, choices, description, and default.
 func structToCommandOptions(req Request) ([]*discordgo.ApplicationCommandOption, error) {
-	v := reflect.ValueOf(req)
 	t := reflect.TypeOf(req)
 	// If req is a pointer, get the underlying value and type.
 	if t.Kind() == reflect.Ptr {
-		v = v.Elem()
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
@@ -101,9 +125,9 @@ func structToCommandOptions(req Request) ([]*discordgo.ApplicationCommandOption,
 	// Iterate over struct fields.
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
-		// Use the field name (lowercased) as the command option name.
 		optionName := strings.ToLower(field.Name)
 		var optionType discordgo.ApplicationCommandOptionType
+
 		// Map common Go types to Discord option types.
 		switch field.Type.Kind() {
 		case reflect.String:
@@ -115,23 +139,43 @@ func structToCommandOptions(req Request) ([]*discordgo.ApplicationCommandOption,
 		case reflect.Bool:
 			optionType = discordgo.ApplicationCommandOptionBoolean
 		default:
-			// Default to string if type is not recognized.
 			optionType = discordgo.ApplicationCommandOptionString
 		}
 
-		options = append(options, &discordgo.ApplicationCommandOption{
+		// Defaults.
+		required := true
+		description := "Auto-generated option for " + optionName
+		var choices []*discordgo.ApplicationCommandOptionChoice
+
+		// Parse custom struct tag if present.
+		if tagValue := field.Tag.Get("discord"); tagValue != "" {
+			tags := parseDiscordTag(tagValue)
+			if _, ok := tags["optional"]; ok {
+				required = false
+			}
+			if desc, ok := tags["description"]; ok && desc != "" {
+				description = desc
+			}
+			if choicesStr, ok := tags["choices"]; ok && choicesStr != "" {
+				choices = parseChoices(choicesStr)
+			}
+		}
+
+		opt := &discordgo.ApplicationCommandOption{
 			Type:        optionType,
 			Name:        optionName,
-			Description: "Auto-generated option for " + optionName,
-			Required:    false, // Extendable via struct tags.
-		})
+			Description: description,
+			Required:    required,
+			Choices:     choices,
+		}
+		options = append(options, opt)
 	}
 
 	return options, nil
 }
 
-// NewBot creates a new Bot instance, registers each command function
-// for every guild the bot is in, and sends an online message listing all available commands.
+// NewBot creates a new Bot instance, registers each command function globally,
+// and sends an online message listing all available commands to each guild.
 func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
 	// Create a new Discord session using the provided bot token.
 	dg, err := discordgo.New("Bot " + cfg.BotToken)
@@ -164,37 +208,37 @@ func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
 	}
 	commandsMessage := fmt.Sprintf("I'm online! Available commands: %s", strings.Join(availableCommands, ", "))
 
-	// For each guild, register commands and send an online message.
-	guilds := dg.State.Guilds
-	for _, guild := range guilds {
-		// Register each command for this guild.
-		for _, fn := range functions {
-			options, err := structToCommandOptions(fn.GetRequestPrototype())
-			if err != nil {
-				slog.Error("failed to generate command options", "command", fn.GetName(), "error", err)
-				return nil, err
-			}
-			slog.Debug("initialising function", "name", fn.GetName(), "options", options, "guild", guild.ID)
-			cmd := &discordgo.ApplicationCommand{
-				Name:        fn.GetName(),
-				Description: "Auto-generated command for " + fn.GetName(),
-				Options:     options,
-			}
-			// Pass the guild ID here so the command is registered only for that guild.
-			_, err = dg.ApplicationCommandCreate(cfg.AppID, guild.ID, cmd)
-			if err != nil {
-				slog.Error("failed to create slash command", "command", fn.GetName(), "error", err)
-				return nil, err
-			}
+	// Register each command globally by using an empty guild ID.
+	for _, fn := range functions {
+		options, err := structToCommandOptions(fn.GetRequestPrototype())
+		if err != nil {
+			slog.Error("failed to generate command options", "command", fn.GetName(), "error", err)
+			return nil, err
 		}
+		slog.Debug("initialising function", "name", fn.GetName(), "options", options)
+		cmd := &discordgo.ApplicationCommand{
+			Name:        fn.GetName(),
+			Description: "Auto-generated command for " + fn.GetName(),
+			Options:     options,
+		}
+		// Pass an empty string as the guild ID for global registration.
+		_, err = dg.ApplicationCommandCreate(cfg.AppID, "", cmd)
+		if err != nil {
+			slog.Error("failed to create global slash command", "command", fn.GetName(), "error", err)
+			return nil, err
+		}
+	}
 
-		// Find a text channel in the guild to send the online message.
+	// Send the online message to every guild the bot is in.
+	for _, guild := range dg.State.Guilds {
+		// Retrieve the guild channels.
 		channels, err := dg.GuildChannels(guild.ID)
 		if err != nil {
 			slog.Error("failed to get guild channels", "guild", guild.ID, "error", err)
-			continue // Skip sending message if channels cannot be fetched.
+			continue // Skip sending the message if channels cannot be fetched.
 		}
 
+		// Find the first text channel.
 		var targetChannel string
 		for _, channel := range channels {
 			if channel.Type == discordgo.ChannelTypeGuildText {
@@ -203,7 +247,7 @@ func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
 			}
 		}
 
-		// If a target channel was found, send the online message.
+		// If a text channel is found, send the online message.
 		if targetChannel != "" {
 			_, err = dg.ChannelMessageSend(targetChannel, commandsMessage)
 			if err != nil {
