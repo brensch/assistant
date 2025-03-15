@@ -1,7 +1,7 @@
 package discord
 
 import (
-	"log"
+	"log/slog"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -16,6 +16,7 @@ type BotConfig struct {
 type Bot struct {
 	session *discordgo.Session
 	config  BotConfig
+	logger  *slog.Logger
 }
 
 // NewBot creates a new Bot instance, opens a websocket session, registers a global slash command,
@@ -33,6 +34,7 @@ func NewBot(cfg BotConfig) (*Bot, error) {
 	bot := &Bot{
 		session: dg,
 		config:  cfg,
+		logger:  slog.Default(),
 	}
 
 	// Register event handlers.
@@ -50,20 +52,26 @@ func NewBot(cfg BotConfig) (*Bot, error) {
 		Description: "Say hi to the bot",
 	})
 	if err != nil {
-		log.Printf("Cannot create slash command 'sayhi': %v", err)
+		bot.logger.Error("failed to create slash command", "command", "sayhi", "error", err)
 	}
 
-	// List all guilds (builds) and send a greeting message to each guild’s system channel (if available).
+	// List all guilds (builds) and send a greeting message to each guild's system channel (if available).
 	guilds := dg.State.Guilds
 	for _, g := range guilds {
-		log.Printf("Bot is in guild: %s (%s)", g.Name, g.ID)
+		bot.logger.Info("bot presence detected in guild", "guild_name", g.Name, "guild_id", g.ID)
+
 		if g.SystemChannelID != "" {
 			_, err = dg.ChannelMessageSend(g.SystemChannelID, "Bot is online! Use /sayhi to interact with me.")
 			if err != nil {
-				log.Printf("Failed to send greeting to guild %s: %v", g.ID, err)
+				bot.logger.Error("failed to send greeting message",
+					"guild_id", g.ID,
+					"channel_id", g.SystemChannelID,
+					"error", err)
 			}
 		} else {
-			log.Printf("Guild %s does not have a system channel set.", g.ID)
+			bot.logger.Warn("unable to send greeting, no system channel configured",
+				"guild_id", g.ID,
+				"guild_name", g.Name)
 		}
 	}
 
@@ -75,23 +83,40 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
-	log.Printf("Message from %s in channel %s: %s", m.Author.Username, m.ChannelID, m.Content)
+
+	b.logger.Debug("message received",
+		"author", m.Author.Username,
+		"author_id", m.Author.ID,
+		"channel_id", m.ChannelID,
+		"content", m.Content,
+		"attachments", len(m.Attachments))
 }
 
 // onInteractionCreate logs each interaction and responds to the "sayhi" command.
 func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	var username string
+	var userID string
+
 	if i.Member != nil && i.Member.User != nil {
 		username = i.Member.User.Username
+		userID = i.Member.User.ID
 	} else if i.User != nil {
 		username = i.User.Username
+		userID = i.User.ID
 	} else {
 		username = "unknown"
+		userID = "unknown"
 	}
 
 	// Use ApplicationCommandData() to obtain command-specific data.
 	cmdData := i.ApplicationCommandData()
-	log.Printf("Interaction from %s: command %s", username, cmdData.Name)
+
+	b.logger.Info("interaction received",
+		"username", username,
+		"user_id", userID,
+		"command", cmdData.Name,
+		"interaction_id", i.ID,
+		"guild_id", i.GuildID)
 
 	if cmdData.Name == "sayhi" {
 		err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -100,8 +125,19 @@ func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.Interaction
 				Content: "Hi there!",
 			},
 		})
+
 		if err != nil {
-			log.Printf("Failed to respond to sayhi interaction: %v", err)
+			b.logger.Error("failed to respond to interaction",
+				"command", "sayhi",
+				"user_id", userID,
+				"interaction_id", i.ID,
+				"error", err)
 		}
 	}
+}
+
+// Close gracefully closes the Discord session.
+func (b *Bot) Close() error {
+	b.logger.Info("shutting down bot")
+	return b.session.Close()
 }
