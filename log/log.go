@@ -1,5 +1,5 @@
 // NOTE: Not well tested, just an illustration of what's possible
-package main
+package log
 
 import (
 	"context"

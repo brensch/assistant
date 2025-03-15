@@ -11,47 +11,19 @@ import (
 	"github.com/brensch/assistant/db"
 	"github.com/brensch/assistant/derozap"
 	"github.com/brensch/assistant/discord"
-	"github.com/bwmarrin/discordgo"
+	"github.com/brensch/assistant/log"
 )
-
-// CoolRequest defines the request structure for the "cool" command.
-type CoolRequest struct {
-	Message string
-}
-
-// coolHandler processes a CoolRequest.
-// It returns a pointer to InteractionResponseData that will be sent as the interaction response.
-func coolHandler(req CoolRequest) (*discordgo.InteractionResponseData, error) {
-	slog.Info("coolHandler executed", "message", req.Message)
-	return &discordgo.InteractionResponseData{
-		Content: "Cool command executed with message: " + req.Message,
-	}, nil
-}
-
-// BoolismRequest defines the request structure for the "boolism" command.
-type BoolismRequest struct {
-	Flag  bool
-	Color string `discord:"optional,description:Favorite color,choices:red|Red;blue|Blue;green|Green,default:blue"`
-}
-
-// boolismHandler processes a BoolismRequest.
-func boolismHandler(req BoolismRequest) (*discordgo.InteractionResponseData, error) {
-	slog.Info("boolismHandler executed", "flag", req.Flag)
-	return &discordgo.InteractionResponseData{
-		Content: fmt.Sprintf("Boolism command executed with flag: %v", req.Flag),
-	}, nil
-}
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Configure pretty colored logging with tint.
-	opts := PrettyHandlerOptions{
+	opts := log.PrettyHandlerOptions{
 		SlogOpts: slog.HandlerOptions{
 			Level: slog.LevelDebug,
 		},
 	}
-	handler := NewPrettyHandler(os.Stdout, opts)
+	handler := log.NewPrettyHandler(os.Stdout, opts)
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
@@ -149,8 +121,7 @@ func main() {
 	// Create a slice of bot functions using generics.
 	functions := []discord.BotFunctionI{
 		// The autocomplete parameter is nil here.
-		discord.NewBotFunction("cool", coolHandler, nil),
-		discord.NewBotFunction("boolism", boolismHandler, nil),
+
 		deroClient.DiscordCommandRetrieveZaps(),
 	}
 
