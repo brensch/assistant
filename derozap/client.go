@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brensch/assistant/db"
 	"github.com/bwmarrin/discordgo"
 	"golang.org/x/net/html"
 )
@@ -38,13 +39,14 @@ type TagRead struct {
 // Client represents a Dero ZAP client with authentication and session handling.
 type Client struct {
 	httpClient *http.Client
+	dbClient   *db.Client
 	username   string
 	password   string
 	loggedIn   bool
 }
 
 // NewClient creates a new Dero ZAP client.
-func NewClient(username, password string) (*Client, error) {
+func NewClient(username, password string, dbClient *db.Client) (*Client, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		slog.Error("failed to create cookie jar", "error", err)
@@ -58,9 +60,39 @@ func NewClient(username, password string) (*Client, error) {
 		},
 		username: username,
 		password: password,
+		dbClient: dbClient,
+	}
+
+	// Create the table for storing DeroZAP reads if it doesn't exist
+	err = client.createTagReadsTable()
+	if err != nil {
+		slog.Error("failed to create tag reads table", "error", err)
+		return nil, fmt.Errorf("failed to create tag reads table: %w", err)
 	}
 
 	return client, nil
+}
+
+// createTagReadsTable creates the table for storing DeroZAP tag reads if it doesn't exist.
+func (c *Client) createTagReadsTable() error {
+	// SQL to create the table if it doesn't exist
+	createTableSQL := `
+	CREATE TABLE IF NOT EXISTS derozap_reads (
+		zap_date DATE NOT NULL,
+		tag_id TEXT NOT NULL,
+		recorded_at TIMESTAMP NOT NULL,
+		PRIMARY KEY (zap_date, tag_id)
+	)
+	`
+
+	// Execute the SQL statement to create the table
+	_, err := c.dbClient.Conn().Exec(createTableSQL)
+	if err != nil {
+		return fmt.Errorf("failed to create derozap_reads table: %w", err)
+	}
+
+	slog.Info("derozap_reads table created or already exists")
+	return nil
 }
 
 // Login authenticates with the Dero ZAP service.
@@ -200,6 +232,94 @@ func (c *Client) FetchTagReads(options ...ReportOption) ([]TagRead, error) {
 	}
 
 	return allTagReads, nil
+}
+
+// storeNewTagReads stores new tag reads in the database.
+func (c *Client) storeNewTagReads(tagReads []TagRead) (int, error) {
+	if len(tagReads) == 0 {
+		return 0, nil
+	}
+
+	// Get the current timestamp
+	now := time.Now()
+
+	// Prepare to track how many new records were added
+	newRecordsCount := 0
+
+	// Process each tag read
+	for _, tr := range tagReads {
+		// Parse the date from the tag read
+		zapDate, err := parseZapDate(tr.Date)
+		if err != nil {
+			slog.Error("failed to parse zap date", "date", tr.Date, "error", err)
+			continue
+		}
+
+		// Format the date for SQL query
+		formattedDate := zapDate.Format("2006-01-02") // SQL date format YYYY-MM-DD
+
+		// Check if this record already exists in the database
+		checkSQL := `SELECT COUNT(*) FROM derozap_reads WHERE zap_date = ? AND tag_id = ?`
+		rows, err := c.dbClient.Conn().Query(checkSQL, formattedDate, tr.TagID)
+		if err != nil {
+			slog.Error("failed to check if tag read exists", "error", err, "tag_id", tr.TagID, "date", formattedDate)
+			continue
+		}
+
+		var count int
+		if rows.Next() {
+			err = rows.Scan(&count)
+			if err != nil {
+				slog.Error("failed to scan count", "error", err)
+				rows.Close()
+				continue
+			}
+		}
+		rows.Close()
+
+		// If record doesn't exist, insert it
+		if count == 0 {
+			insertSQL := `INSERT INTO derozap_reads (zap_date, tag_id, recorded_at) VALUES (?, ?, ?)`
+			_, err := c.dbClient.Conn().Exec(insertSQL, formattedDate, tr.TagID, now)
+			if err != nil {
+				slog.Error("failed to insert tag read", "error", err, "tag_id", tr.TagID, "date", formattedDate)
+				continue
+			}
+
+			newRecordsCount++
+			slog.Info("inserted new tag read", "tag_id", tr.TagID, "date", formattedDate)
+		}
+	}
+
+	return newRecordsCount, nil
+}
+
+// parseZapDate parses a date string from the format in tag reads.
+func parseZapDate(dateStr string) (time.Time, error) {
+	// Assuming the date format is MM/DD/YYYY or similar
+	// First, try common format
+	date, err := time.Parse("01/02/2006", dateStr)
+	if err == nil {
+		return date, nil
+	}
+
+	// Try alternative formats if the first attempt fails
+	formats := []string{
+		"01/02/2006",
+		"01/02/2006 03:04:05 PM",
+		"01/02/2006 15:04:05",
+		"2006-01-02",
+		"2006-01-02 15:04:05",
+	}
+
+	for _, format := range formats {
+		date, err := time.Parse(format, dateStr)
+		if err == nil {
+			return date, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("unable to parse date: %s", dateStr)
 }
 
 // ReportParams represents the parameters for a report request.
@@ -417,10 +537,10 @@ type DiscordSender interface {
 }
 
 // Start begins a background process that runs every five minutes.
-// It fetches the latest tag reads and sends a Discord embed message
-// with a summary of the results using the provided discordBot.
+// It fetches the latest tag reads, stores new ones in the database,
+// and sends a Discord embed message with a summary of the results.
 func (c *Client) Start(discordBot DiscordSender) {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(30 * time.Second)
 	go func() {
 		for range ticker.C {
 			slog.Info("Fetching tag reads for periodic report")
@@ -437,11 +557,24 @@ func (c *Client) Start(discordBot DiscordSender) {
 				continue
 			}
 
+			// Store new tag reads in the database
+			newRecordsCount, err := c.storeNewTagReads(tagReads)
+			if err != nil {
+				slog.Error("failed to store tag reads", "error", err)
+				// Continue with Discord notification even if DB storage failed
+			}
+
 			var description string
 			if len(tagReads) == 0 {
 				description = "No tag reads found in the latest report."
 			} else {
-				description = fmt.Sprintf("Found %d tag reads:\n", len(tagReads))
+				if newRecordsCount > 0 {
+					description = fmt.Sprintf("Found %d tag reads (%d new entries added to database):\n",
+						len(tagReads), newRecordsCount)
+				} else {
+					description = fmt.Sprintf("Found %d tag reads (no new entries):\n", len(tagReads))
+				}
+
 				// Optionally list the first few tag reads.
 				maxItems := 5
 				if len(tagReads) < maxItems {

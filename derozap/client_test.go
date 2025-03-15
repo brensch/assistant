@@ -31,7 +31,7 @@ func TestClientIntegration(t *testing.T) {
 	}
 
 	// Create a new client with the provided credentials
-	client, err := derozap.NewClient(username, password)
+	client, err := derozap.NewClient(username, password, nil)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}

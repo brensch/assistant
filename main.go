@@ -112,7 +112,7 @@ func main() {
 	deroZapUser := os.Getenv("DEROUSER")
 	deroZapPass := os.Getenv("DEROPASS")
 
-	deroClient, err := derozap.NewClient(deroZapUser, deroZapPass)
+	deroClient, err := derozap.NewClient(deroZapUser, deroZapPass, dbClient)
 	if err != nil {
 		slog.Error("failed to init dero zap", "err", err)
 		os.Exit(1)
