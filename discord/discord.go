@@ -1,10 +1,75 @@
 package discord
 
 import (
+	"fmt"
+	"reflect"
+	"strings"
+
 	"log/slog"
 
 	"github.com/bwmarrin/discordgo"
 )
+
+// Request is a blank interface for the command request definitions.
+// You may later add common methods here.
+type Request interface{}
+
+// Autocomplete is an interface for types that can provide autocomplete suggestions.
+type Autocomplete interface {
+	// Complete takes an input string and returns a list of choices for the option.
+	Complete(input string) ([]*discordgo.ApplicationCommandOptionChoice, error)
+}
+
+// BotFunctionI is the common interface for all bot command functions.
+type BotFunctionI interface {
+	GetName() string
+	GetRequestPrototype() Request
+	// HandleInteraction decodes interaction data into a request struct and calls the handler.
+	// It returns the response data that can be sent directly to Discord.
+	HandleInteraction(data *discordgo.ApplicationCommandInteractionData) (*discordgo.InteractionResponseData, error)
+}
+
+// GenericBotFunction is a generic implementation of BotFunctionI.
+type GenericBotFunction[T Request] struct {
+	// Name is the command name.
+	Name string
+	// RequestPrototype is an instance of the request type (typically the zero value)
+	// used for reflection to generate command options.
+	RequestPrototype T
+	// Handler is the function to execute for the command.
+	Handler func(T) (*discordgo.InteractionResponseData, error)
+	// Autocomplete is an optional implementation for providing autocomplete choices.
+	Autocomplete Autocomplete
+}
+
+// GetName returns the command's name.
+func (bf *GenericBotFunction[T]) GetName() string {
+	return bf.Name
+}
+
+// GetRequestPrototype returns the command's request prototype.
+func (bf *GenericBotFunction[T]) GetRequestPrototype() Request {
+	return bf.RequestPrototype
+}
+
+// HandleInteraction processes the interaction by constructing a request of type T from the data
+// and then invoking the handler. (For now, the request is not populated from the interaction options.)
+func (bf *GenericBotFunction[T]) HandleInteraction(data *discordgo.ApplicationCommandInteractionData) (*discordgo.InteractionResponseData, error) {
+	var req T
+	// TODO: Decode data.Options into req using, for example, mitchellh/mapstructure.
+	return bf.Handler(req)
+}
+
+// NewBotFunction is a generic constructor that returns a BotFunctionI.
+func NewBotFunction[T Request](name string, handler func(T) (*discordgo.InteractionResponseData, error), autocomplete Autocomplete) BotFunctionI {
+	var reqPrototype T
+	return &GenericBotFunction[T]{
+		Name:             name,
+		RequestPrototype: reqPrototype,
+		Handler:          handler,
+		Autocomplete:     autocomplete,
+	}
+}
 
 // BotConfig contains configuration for the bot.
 type BotConfig struct {
@@ -12,15 +77,62 @@ type BotConfig struct {
 	BotToken string
 }
 
-// Bot encapsulates the discordgo session and configuration.
+// Bot encapsulates the discordgo session, configuration, and registered functions.
 type Bot struct {
-	session *discordgo.Session
-	config  BotConfig
+	session   *discordgo.Session
+	config    BotConfig
+	functions []BotFunctionI
 }
 
-// NewBot creates a new Bot instance, opens a websocket session, registers a global slash command,
-// logs all incoming messages and interactions, and sends a greeting message to every guild.
-func NewBot(cfg BotConfig) (*Bot, error) {
+// structToCommandOptions uses reflection to generate Discord command options from a request struct.
+func structToCommandOptions(req Request) ([]*discordgo.ApplicationCommandOption, error) {
+	v := reflect.ValueOf(req)
+	t := reflect.TypeOf(req)
+	// If req is a pointer, get the underlying value and type.
+	if t.Kind() == reflect.Ptr {
+		v = v.Elem()
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("request is not a struct")
+	}
+
+	var options []*discordgo.ApplicationCommandOption
+	// Iterate over struct fields.
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		// Use the field name (lowercased) as the command option name.
+		optionName := strings.ToLower(field.Name)
+		var optionType discordgo.ApplicationCommandOptionType
+		// Map common Go types to Discord option types.
+		switch field.Type.Kind() {
+		case reflect.String:
+			optionType = discordgo.ApplicationCommandOptionString
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			optionType = discordgo.ApplicationCommandOptionInteger
+		case reflect.Float32, reflect.Float64:
+			optionType = discordgo.ApplicationCommandOptionNumber
+		case reflect.Bool:
+			optionType = discordgo.ApplicationCommandOptionBoolean
+		default:
+			// Default to string if type is not recognized.
+			optionType = discordgo.ApplicationCommandOptionString
+		}
+
+		options = append(options, &discordgo.ApplicationCommandOption{
+			Type:        optionType,
+			Name:        optionName,
+			Description: "Auto-generated option for " + optionName,
+			Required:    false, // Extendable via struct tags.
+		})
+	}
+
+	return options, nil
+}
+
+// NewBot creates a new Bot instance and registers all provided command functions using reflection
+// to generate their Discord slash command options.
+func NewBot(cfg BotConfig, functions []BotFunctionI) (*Bot, error) {
 	// Create a new Discord session using the provided bot token.
 	dg, err := discordgo.New("Bot " + cfg.BotToken)
 	if err != nil {
@@ -31,8 +143,9 @@ func NewBot(cfg BotConfig) (*Bot, error) {
 	dg.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent
 
 	bot := &Bot{
-		session: dg,
-		config:  cfg,
+		session:   dg,
+		config:    cfg,
+		functions: functions,
 	}
 
 	// Register event handlers.
@@ -44,32 +157,22 @@ func NewBot(cfg BotConfig) (*Bot, error) {
 		return nil, err
 	}
 
-	// Register the global slash command "sayhi".
-	_, err = dg.ApplicationCommandCreate(cfg.AppID, "", &discordgo.ApplicationCommand{
-		Name:        "sayhi",
-		Description: "Say hi to the bot",
-	})
-	if err != nil {
-		slog.Error("failed to create slash command", "command", "sayhi", "error", err)
-	}
-
-	// List all guilds (builds) and send a greeting message to each guild's system channel (if available).
-	guilds := dg.State.Guilds
-	for _, g := range guilds {
-		slog.Info("bot presence detected in guild", "guild_name", g.Name, "guild_id", g.ID)
-
-		if g.SystemChannelID != "" {
-			_, err = dg.ChannelMessageSend(g.SystemChannelID, "Bot is online! Use /sayhi to interact with me.")
-			if err != nil {
-				slog.Error("failed to send greeting message",
-					"guild_id", g.ID,
-					"channel_id", g.SystemChannelID,
-					"error", err)
-			}
-		} else {
-			slog.Warn("unable to send greeting, no system channel configured",
-				"guild_id", g.ID,
-				"guild_name", g.Name)
+	// Register each command function as a global slash command.
+	for _, fn := range functions {
+		options, err := structToCommandOptions(fn.GetRequestPrototype())
+		if err != nil {
+			slog.Error("failed to generate command options", "command", fn.GetName(), "error", err)
+			return nil, err
+		}
+		cmd := &discordgo.ApplicationCommand{
+			Name:        fn.GetName(),
+			Description: "Auto-generated command for " + fn.GetName(),
+			Options:     options,
+		}
+		_, err = dg.ApplicationCommandCreate(cfg.AppID, "", cmd)
+		if err != nil {
+			slog.Error("failed to create slash command", "command", fn.GetName(), "error", err)
+			// Decide whether to continue or fail immediately.
 		}
 	}
 
@@ -90,47 +193,37 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 		"attachments", len(m.Attachments))
 }
 
-// onInteractionCreate logs each interaction and responds to the "sayhi" command.
+// onInteractionCreate routes interactions to the correct BotFunction based on the command name.
 func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	var username string
-	var userID string
-
-	if i.Member != nil && i.Member.User != nil {
-		username = i.Member.User.Username
-		userID = i.Member.User.ID
-	} else if i.User != nil {
-		username = i.User.Username
-		userID = i.User.ID
-	} else {
-		username = "unknown"
-		userID = "unknown"
-	}
-
-	// Use ApplicationCommandData() to obtain command-specific data.
 	cmdData := i.ApplicationCommandData()
 
-	slog.Info("interaction received",
-		"username", username,
-		"user_id", userID,
-		"command", cmdData.Name,
-		"interaction_id", i.ID,
-		"guild_id", i.GuildID)
-
-	if cmdData.Name == "sayhi" {
-		err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Hi there!",
-			},
-		})
-
-		if err != nil {
-			slog.Error("failed to respond to interaction",
-				"command", "sayhi",
-				"user_id", userID,
-				"interaction_id", i.ID,
-				"error", err)
+	// Find the registered function with a matching name.
+	var fn BotFunctionI
+	for _, f := range b.functions {
+		if f.GetName() == cmdData.Name {
+			fn = f
+			break
 		}
+	}
+	if fn == nil {
+		slog.Warn("received unknown command", "command", cmdData.Name)
+		return
+	}
+
+	// Execute the function's handler using the interaction data.
+	respData, err := fn.HandleInteraction(&cmdData)
+	if err != nil {
+		slog.Error("failed to execute command", "command", fn.GetName(), "error", err)
+		return
+	}
+
+	// Respond to the interaction using the returned response data.
+	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: respData,
+	})
+	if err != nil {
+		slog.Error("failed to respond to command", "command", fn.GetName(), "error", err)
 	}
 }
 
