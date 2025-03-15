@@ -125,7 +125,7 @@ func (c *Client) handleDerozapCommand(req DerozapRequest) (*discordgo.Interactio
 
 	// Combine lines into an ASCII grid inside a code block.
 	asciiTable := "```\n" + strings.Join(lines, "\n") + "\n```"
-	description := fmt.Sprintf("Total tag reads: %d\n\n%s", len(tagReads), asciiTable)
+	description := fmt.Sprintf("Total tag reads: %d - $%d\n\n%s", len(tagReads), len(tagReads)*15, asciiTable)
 
 	embed := &discordgo.MessageEmbed{
 		Title:       "Dero ZAP Tag Reads Detailed Breakdown",
