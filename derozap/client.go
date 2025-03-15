@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
 	"golang.org/x/net/html"
 )
 
@@ -58,8 +59,6 @@ func NewClient(username, password string) (*Client, error) {
 		username: username,
 		password: password,
 	}
-
-	slog.Debug("initialised dero zap client")
 
 	return client, nil
 }
@@ -409,4 +408,59 @@ func extractTotalPages(htmlBody []byte) int {
 
 	// Default to 1 if we can't determine total pages.
 	return 1
+}
+
+// DiscordSender is an interface for sending Discord embed messages.
+// It is assumed that the provided bot implements a SendEmbed method.
+type DiscordSender interface {
+	SendEmbed(embed *discordgo.MessageEmbed)
+}
+
+// Start begins a background process that runs every five minutes.
+// It fetches the latest tag reads and sends a Discord embed message
+// with a summary of the results using the provided discordBot.
+func (c *Client) Start(discordBot DiscordSender) {
+	ticker := time.NewTicker(5 * time.Minute)
+	go func() {
+		for range ticker.C {
+			slog.Info("Fetching tag reads for periodic report")
+			tagReads, err := c.FetchTagReads()
+			if err != nil {
+				slog.Error("failed to fetch tag reads", "error", err)
+				errorEmbed := &discordgo.MessageEmbed{
+					Title:       "Dero ZAP Report Error",
+					Description: fmt.Sprintf("Error fetching tag reads: %v", err),
+					Color:       0xFF0000, // Red for errors.
+					Timestamp:   time.Now().Format(time.RFC3339),
+				}
+				discordBot.SendEmbed(errorEmbed)
+				continue
+			}
+
+			var description string
+			if len(tagReads) == 0 {
+				description = "No tag reads found in the latest report."
+			} else {
+				description = fmt.Sprintf("Found %d tag reads:\n", len(tagReads))
+				// Optionally list the first few tag reads.
+				maxItems := 5
+				if len(tagReads) < maxItems {
+					maxItems = len(tagReads)
+				}
+				for i := 0; i < maxItems; i++ {
+					tr := tagReads[i]
+					description += fmt.Sprintf("- Tag %s at %s\n", tr.TagID, tr.Date)
+				}
+			}
+
+			reportEmbed := &discordgo.MessageEmbed{
+				Title:       "Dero ZAP Tag Reads Report",
+				Description: description,
+				Color:       0x00FF00, // Green for a successful report.
+				Timestamp:   time.Now().Format(time.RFC3339),
+			}
+
+			discordBot.SendEmbed(reportEmbed)
+		}
+	}()
 }

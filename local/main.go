@@ -50,8 +50,6 @@ func main() {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
-	slog.Error("yo")
-
 	// Log startup message.
 	slog.Info("Discord Bot Starting")
 
@@ -96,6 +94,8 @@ func main() {
 
 	// Log successful startup.
 	slog.Info("Bot is now running")
+
+	deroClient.Start(bot)
 
 	// Wait for an interrupt signal to gracefully shut down.
 	stop := make(chan os.Signal, 1)
