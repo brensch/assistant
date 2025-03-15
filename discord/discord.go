@@ -1,209 +1,151 @@
-// Package discord implements a Discord bot with methods for handling interactions
-// and sending messages. It registers a global slash command ("say hi") on initialization.
 package discord
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
 	"log"
 	"net/http"
+
+	"github.com/bwmarrin/discordgo"
 )
 
-// Constants used in Discord interactions.
-const (
-	// Incoming interaction types.
-	PingInteraction    = 1
-	ApplicationCommand = 2
-	// Outgoing response types.
-	PongResponse             = 1
-	ChannelMessageWithSource = 4
-)
-
-// CommandType represents the type of a Discord command.
-type CommandType int
-
-const (
-	// ChatInputCommand represents a slash command.
-	ChatInputCommand CommandType = 1
-	// You can add additional command types here if needed.
-	// For example:
-	// UserCommand    CommandType = 2
-	// MessageCommand CommandType = 3
-)
-
-// Interaction represents a minimal Discord interaction payload.
-type Interaction struct {
-	Type  int              `json:"type"`
-	Data  *InteractionData `json:"data,omitempty"`
-	Token string           `json:"token"`
-	ID    string           `json:"id"`
-}
-
-// InteractionData holds data for application commands.
-type InteractionData struct {
-	Name string `json:"name"`
-}
-
-// InteractionResponse is used to respond to an interaction.
-type InteractionResponse struct {
-	Type int                      `json:"type"`
-	Data *InteractionCallbackData `json:"data,omitempty"`
-}
-
-// InteractionCallbackData holds the message to be sent back.
-type InteractionCallbackData struct {
-	Content string `json:"content"`
-}
-
-// CommandPayload defines the JSON structure for a slash command.
-type CommandPayload struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Type        CommandType `json:"type"`
-}
-
-// Bot holds configuration for your Discord bot.
-type Bot struct {
-	AppID      string
-	BotToken   string
-	ChannelIDs []string
-}
-
-// BotConfig holds parameters used to initialize a Bot.
+// BotConfig contains configuration for the bot.
 type BotConfig struct {
-	AppID      string
-	BotToken   string
-	ChannelIDs []string
+	AppID    string
+	BotToken string
 }
 
-// NewBot creates a new Bot instance. It registers a global slash command ("say hi")
-// so that Discord knows to send interactions to your endpoint.
+// Bot encapsulates the discordgo session and configuration.
+type Bot struct {
+	session *discordgo.Session
+	config  BotConfig
+}
+
+// NewBot creates a new Bot instance, opens a websocket session, registers a global slash command,
+// logs all incoming messages and interactions, and sends a greeting message to every guild.
 func NewBot(cfg BotConfig) (*Bot, error) {
-	bot := &Bot{
-		AppID:      cfg.AppID,
-		BotToken:   cfg.BotToken,
-		ChannelIDs: cfg.ChannelIDs,
+	// Create a new Discord session using the provided bot token.
+	dg, err := discordgo.New("Bot " + cfg.BotToken)
+	if err != nil {
+		return nil, err
 	}
 
-	// Register the global command "say hi".
-	err := bot.registerGlobalCommand(CommandPayload{
-		Name:        "sayhi", // Must be all lowercase with no spaces
-		Description: "Replies with hi",
-		Type:        ChatInputCommand,
+	// Set necessary intents.
+	dg.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent
+
+	bot := &Bot{
+		session: dg,
+		config:  cfg,
+	}
+
+	// Register event handlers.
+	dg.AddHandler(bot.onMessageCreate)
+	dg.AddHandler(bot.onInteractionCreate)
+
+	// Open the websocket connection.
+	if err := dg.Open(); err != nil {
+		return nil, err
+	}
+
+	// Register the global slash command "sayhi".
+	_, err = dg.ApplicationCommandCreate(cfg.AppID, "", &discordgo.ApplicationCommand{
+		Name:        "sayhi",
+		Description: "Say hi to the bot",
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to register global command: %w", err)
+		log.Printf("Cannot create slash command 'sayhi': %v", err)
 	}
+
+	// List all guilds (builds) and send a greeting message to each guild’s system channel (if available).
+	guilds := dg.State.Guilds
+	for _, g := range guilds {
+		log.Printf("Bot is in guild: %s (%s)", g.Name, g.ID)
+		if g.SystemChannelID != "" {
+			_, err = dg.ChannelMessageSend(g.SystemChannelID, "Bot is online! Use /sayhi to interact with me.")
+			if err != nil {
+				log.Printf("Failed to send greeting to guild %s: %v", g.ID, err)
+			}
+		} else {
+			log.Printf("Guild %s does not have a system channel set.", g.ID)
+		}
+	}
+
 	return bot, nil
 }
 
-// registerGlobalCommand registers a global slash command with Discord.
-func (b *Bot) registerGlobalCommand(payload CommandPayload) error {
-	url := fmt.Sprintf("https://discord.com/api/v10/applications/%s/commands", b.AppID)
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
+// onMessageCreate logs every message the bot sees (ignoring its own).
+func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
+	if m.Author.ID == s.State.User.ID {
+		return
 	}
-
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bot "+b.BotToken)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("failed to register command, status: %s", resp.Status)
-	}
-	return nil
+	log.Printf("Message from %s in channel %s: %s", m.Author.Username, m.ChannelID, m.Content)
 }
 
-// Handler is an HTTP handler method for processing Discord interactions.
-// For the slash command "say hi", it replies with the text "hi".
+// onInteractionCreate logs each interaction and responds to the "sayhi" command.
+func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	var username string
+	if i.Member != nil && i.Member.User != nil {
+		username = i.Member.User.Username
+	} else if i.User != nil {
+		username = i.User.Username
+	} else {
+		username = "unknown"
+	}
+
+	// Use ApplicationCommandData() to obtain command-specific data.
+	cmdData := i.ApplicationCommandData()
+	log.Printf("Interaction from %s: command %s", username, cmdData.Name)
+
+	if cmdData.Name == "sayhi" {
+		err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "Hi there!",
+			},
+		})
+		if err != nil {
+			log.Printf("Failed to respond to sayhi interaction: %v", err)
+		}
+	}
+}
+
+// Handler serves as the HTTP endpoint for Discord interactions.
 func (b *Bot) Handler(w http.ResponseWriter, r *http.Request) {
-	// Read the request body.
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		log.Printf("Error reading body: %v", err)
-		http.Error(w, "could not read body", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	// Parse the JSON payload.
-	var interaction Interaction
-	if err := json.Unmarshal(body, &interaction); err != nil {
-		log.Printf("Error parsing JSON: %v", err)
-		http.Error(w, "bad request", http.StatusBadRequest)
+	var interaction discordgo.Interaction
+	if err := json.NewDecoder(r.Body).Decode(&interaction); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
 
-	// Respond to Discord's PING.
-	if interaction.Type == PingInteraction {
-		resp := InteractionResponse{Type: PongResponse}
+	// Use ApplicationCommandData() to get the command name.
+	cmdData := interaction.ApplicationCommandData()
+	log.Printf("HTTP Interaction received: command %s", cmdData.Name)
+
+	// Handle Ping requests.
+	if interaction.Type == discordgo.InteractionPing {
+		// In discordgo v0.28.1, respond with type 1 (Pong).
+		response := discordgo.InteractionResponse{
+			Type: 1, // Pong response.
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		json.NewEncoder(w).Encode(response)
 		return
 	}
 
-	// Process application commands.
-	if interaction.Type == ApplicationCommand && interaction.Data != nil {
-		// Make sure the command name matches what Discord sends (command names are lowercased).
-		if interaction.Data.Name == "sayhi" {
-			resp := InteractionResponse{
-				Type: ChannelMessageWithSource,
-				Data: &InteractionCallbackData{
-					Content: "hi",
+	// Handle application commands.
+	if interaction.Type == discordgo.InteractionApplicationCommand {
+		if cmdData.Name == "sayhi" {
+			response := discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Hi there!",
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
+			json.NewEncoder(w).Encode(response)
 			return
 		}
 	}
 
-	// For any other interactions, simply return 200 OK.
-	w.WriteHeader(http.StatusOK)
-}
-
-// SendMessage sends the given message to every channel listed in the Bot's ChannelIDs.
-// It makes an HTTP POST to Discord's channel messages endpoint for each channel.
-func (b *Bot) SendMessage(message string) error {
-	for _, channelID := range b.ChannelIDs {
-		url := fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", channelID)
-		payload := map[string]string{
-			"content": message,
-		}
-		body, err := json.Marshal(payload)
-		if err != nil {
-			return fmt.Errorf("failed to marshal payload: %w", err)
-		}
-
-		req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
-		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
-		}
-		req.Header.Set("Authorization", "Bot "+b.BotToken)
-		req.Header.Set("Content-Type", "application/json")
-
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("Error sending message to channel %s: %v", channelID, err)
-			continue
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			log.Printf("Non-2xx response sending message to channel %s: %s", channelID, resp.Status)
-		}
-		_ = resp.Body.Close()
-	}
-	return nil
+	// For any unhandled interactions, return a not-implemented error.
+	http.Error(w, "Not implemented", http.StatusNotImplemented)
 }

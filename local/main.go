@@ -26,23 +26,24 @@ func main() {
 	}
 
 	botToken := os.Getenv("BOTTOKEN")
+	if botToken == "" {
+		slog.Error("BOTTOKEN environment variable not set")
+		os.Exit(1)
+	}
 
 	cfg := discord.BotConfig{
 		AppID:    "1349959098543767602",
 		BotToken: botToken,
-		// ChannelIDs: []string{"channelID1", "channelID2"},
 	}
-	var err error
 	bot, err := discord.NewBot(cfg)
 	if err != nil {
-		// In Cloud Functions, log.Fatal will cause a startup failure.
 		panic(err)
 	}
 
-	// Register the Discord handler
+	// Register the HTTP handler for Discord interactions.
 	http.HandleFunc("/discord", bot.Handler)
 
-	// Start the server in a goroutine
+	// Start the HTTP server in a goroutine.
 	go func() {
 		slog.Info("starting server on port 8080")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -51,22 +52,16 @@ func main() {
 		}
 	}()
 
-	// Set up channel to handle graceful shutdown
+	// Wait for an interrupt signal to gracefully shut down.
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
-
-	// Block until signal is received
 	<-stop
-	slog.Info("shutting down server...")
 
-	// Create a deadline for server shutdown
+	slog.Info("shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
-	// Attempt graceful shutdown
 	if err := server.Shutdown(ctx); err != nil {
 		slog.Error("error during server shutdown", "error", err)
 	}
-
 	slog.Info("server gracefully stopped")
 }
