@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"time"
 
+	"github.com/brensch/assistant/db"
 	"github.com/brensch/assistant/derozap"
 	"github.com/brensch/assistant/discord"
 	"github.com/bwmarrin/discordgo"
@@ -40,6 +43,8 @@ func boolismHandler(req BoolismRequest) (*discordgo.InteractionResponseData, err
 }
 
 func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+
 	// Configure pretty colored logging with tint.
 	opts := PrettyHandlerOptions{
 		SlogOpts: slog.HandlerOptions{
@@ -52,6 +57,70 @@ func main() {
 
 	// Log startup message.
 	slog.Info("Discord Bot Starting")
+
+	// Create the database directory if it doesn't exist
+	dbDir := "./dbfiles"
+	os.MkdirAll(dbDir, 0755)
+
+	// Try using in-memory mode first to test if DuckDB works
+	dbClient, err := db.NewClient(dbDir)
+	if err != nil {
+		slog.Error("failed to create client", "error", err)
+		os.Exit(1)
+	}
+
+	// Start the client.
+	err = dbClient.Start(ctx)
+	if err != nil {
+		slog.Error("failed to start client", "error", err)
+		os.Exit(1)
+	}
+
+	// Create our example table if it doesn't exist
+	_, err = dbClient.Conn().Exec("CREATE TABLE IF NOT EXISTS example(id INTEGER, name VARCHAR)")
+	if err != nil {
+		slog.Error("failed to create table", "error", err)
+		os.Exit(1)
+	}
+
+	// 1. Read all contents of the database first
+	slog.Info("Reading existing data from database")
+	rows, err := dbClient.Conn().QueryContext(ctx, "SELECT * FROM example")
+	if err != nil {
+		slog.Error("failed to query database", "error", err)
+		os.Exit(1)
+	}
+
+	var existingData []struct {
+		ID   int
+		Name string
+	}
+
+	for rows.Next() {
+		var id int
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			slog.Error("failed to scan row", "error", err)
+			break
+		}
+		slog.Info("Existing data", "id", id, "name", name)
+		existingData = append(existingData, struct {
+			ID   int
+			Name string
+		}{id, name})
+	}
+	rows.Close()
+
+	// 2. Write a new line to the database
+	newID := len(existingData) + 1
+	newName := fmt.Sprintf("Record-%d-%s", newID, time.Now().Format("15:04:05"))
+	slog.Info("Writing new data to database", "id", newID, "name", newName)
+
+	_, err = dbClient.Conn().ExecContext(ctx, "INSERT INTO example(id, name) VALUES(?, ?)", newID, newName)
+	if err != nil {
+		slog.Error("failed to insert data", "error", err)
+		os.Exit(1)
+	}
 
 	// Get bot token from environment.
 	botToken := os.Getenv("BOTTOKEN")
@@ -102,10 +171,17 @@ func main() {
 	signal.Notify(stop, os.Interrupt)
 	<-stop
 
+	err = dbClient.Stop()
+	if err != nil {
+		slog.Error("failed to stop client", "error", err)
+	}
+
 	// Shut down the bot.
 	slog.Info("Shutting down bot...")
 	err = bot.Close()
 	if err != nil {
 		slog.Error("Error during shutdown", "error", err)
 	}
+
+	cancel()
 }
