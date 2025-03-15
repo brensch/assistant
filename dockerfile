@@ -44,8 +44,5 @@ COPY --from=builder /app/main .
 # Copy any necessary config files or data
 COPY *.sql* ./
 
-# Expose any necessary ports (adjust as needed)
-EXPOSE 8080
-
 # Run the application
 CMD ["./main"]
