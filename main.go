@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"time"
 
 	"github.com/brensch/assistant/config"
 	"github.com/brensch/assistant/db"
@@ -57,45 +55,6 @@ func main() {
 	_, err = dbClient.Conn().Exec("CREATE TABLE IF NOT EXISTS example(id INTEGER, name VARCHAR)")
 	if err != nil {
 		slog.Error("failed to create table", "error", err)
-		os.Exit(1)
-	}
-
-	// 1. Read all contents of the database first
-	slog.Info("Reading existing data from database")
-	rows, err := dbClient.Conn().QueryContext(ctx, "SELECT * FROM example")
-	if err != nil {
-		slog.Error("failed to query database", "error", err)
-		os.Exit(1)
-	}
-
-	var existingData []struct {
-		ID   int
-		Name string
-	}
-
-	for rows.Next() {
-		var id int
-		var name string
-		if err := rows.Scan(&id, &name); err != nil {
-			slog.Error("failed to scan row", "error", err)
-			break
-		}
-		slog.Info("Existing data", "id", id, "name", name)
-		existingData = append(existingData, struct {
-			ID   int
-			Name string
-		}{id, name})
-	}
-	rows.Close()
-
-	// 2. Write a new line to the database
-	newID := len(existingData) + 1
-	newName := fmt.Sprintf("Record-%d-%s", newID, time.Now().Format("15:04:05"))
-	slog.Info("Writing new data to database", "id", newID, "name", newName)
-
-	_, err = dbClient.Conn().ExecContext(ctx, "INSERT INTO example(id, name) VALUES(?, ?)", newID, newName)
-	if err != nil {
-		slog.Error("failed to insert data", "error", err)
 		os.Exit(1)
 	}
 
