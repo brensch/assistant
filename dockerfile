@@ -32,17 +32,17 @@ RUN apt-get update && apt-get install -y \
     libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a directory for persistent data
-RUN mkdir -p /dbfiles
+# Create directories for configuration and data
+RUN mkdir -p /app/data
 
-# Define a volume for data persistence
-VOLUME ["/dbfiles"]
+# Define volumes for configuration and data
+VOLUME ["/app/data"]
 
 # Copy the binary from the builder stage
 COPY --from=builder /app/main .
 
-# Copy any necessary config files or data
-COPY *.sql* ./
+# Set the data directory environment variable
+ENV DATA_DIR=/app/data
 
 # Run the application
 CMD ["./main"]
