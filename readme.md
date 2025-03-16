@@ -1,4 +1,7 @@
 ## Build
+
+To build on github, push a git tag starting with 'v'
+
 ```
 docker build -t duckdb-go-app .
 ```
