@@ -30,15 +30,11 @@ builds:
       - -trimpath
 
 archives:
-  - format_overrides:
+  - format: tar.gz
+    format_overrides:
       - goos: windows
         format: zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    replacements:
-      darwin: macos
-      linux: linux
-      windows: windows
-      amd64: x86_64
     files:
       - README*
       - LICENSE*
