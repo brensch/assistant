@@ -8,7 +8,6 @@ docker build -t duckdb-go-app .
 docker run -d \
   --name discord-bot-production \
   -v $(pwd)/.conf:/app/.conf:ro \
-  -v $(pwd)/data:/app/data \
+  -v $(pwd)/dbfiles:/app/dbfiles \
   duckdb-go-app
-
 ```

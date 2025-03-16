@@ -32,12 +32,6 @@ RUN apt-get update && apt-get install -y \
     libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create directories for configuration and data
-RUN mkdir -p /app/data
-
-# Define volumes for configuration and data
-VOLUME ["/app/data"]
-
 # Copy the binary from the builder stage
 COPY --from=builder /app/main .
 
