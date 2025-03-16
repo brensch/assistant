@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/brensch/assistant/config" // New import
+	"github.com/brensch/assistant/config"
 	"github.com/brensch/assistant/db"
 	"github.com/brensch/assistant/derozap"
 	"github.com/brensch/assistant/discord"
