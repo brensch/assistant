@@ -66,8 +66,6 @@ dockers:
   - image_templates:
       - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/{{ .ProjectName }}:{{ .Version }}"
       - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/{{ .ProjectName }}:latest"
-      - "{{ .Env.DOCKERHUB_USERNAME }}/{{ .ProjectName }}:{{ .Version }}"
-      - "{{ .Env.DOCKERHUB_USERNAME }}/{{ .ProjectName }}:latest"
     dockerfile: Dockerfile.goreleaser
     use: buildx
     build_flag_templates:
