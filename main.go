@@ -81,7 +81,7 @@ func main() {
 
 	// Define scheduled tasks
 	schedules := []discord.BotScheduleI{
-		deroClient.DiscordScheduleZapCheck("30 * * * * *"),
+		deroClient.DiscordScheduleZapCheck("0 * * * *"),
 	}
 
 	// Create the bot, providing the configuration and list of functions.

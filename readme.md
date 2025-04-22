@@ -1,7 +1,20 @@
 ## Build
 This gets built automatically on deploy to github.
 
-## Run
+If you're impatient, run this:
+
+```
+docker build -t assistant .
+
+docker run -d \
+  --name discord-bot-production \
+  -v $(pwd)/.conf:/app/.conf:ro \
+  -v $(pwd)/dbfiles:/app/dbfiles \
+  assistant
+```
+
+
+## Run from cloud build
 ```
 docker run -d \
   --name discord-bot-production \
