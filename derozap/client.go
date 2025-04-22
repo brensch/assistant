@@ -428,8 +428,6 @@ func parseTagReads(htmlBody []byte) ([]TagRead, error) {
 		return nil
 	}
 
-	fmt.Println("got body", string(htmlBody))
-
 	table := findTable(doc)
 	if table == nil {
 		slog.Error("report table not found in HTML response", "body", string(htmlBody))
