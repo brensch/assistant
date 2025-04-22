@@ -7,7 +7,7 @@ If you're impatient, run this:
 docker build -t assistant .
 
 docker run -d \
-  --name discord-bot-production \
+  --name discord-bot-local \
   -v $(pwd)/.conf:/app/.conf:ro \
   -v $(pwd)/dbfiles:/app/dbfiles \
   assistant
